@@ -42,7 +42,8 @@ public sealed class MainWindow : Window
         var selected = Joints.Parts.FirstOrDefault(p => p.Bone == Overlay.Selected);
         ImGui.Spacing();
         ImGui.TextColored(Gold, selected != null ? "Selected: " + selected.Name : "Click a circle to select a body part.");
-        ImGui.TextColored(Dim, "Drag a circle around its joint to bend it.");
+        if (Posing.Locked.Length > 0) ImGui.TextColored(Gold, "Moving " + Posing.Locked + " (let go to finish)");
+        else ImGui.TextColored(Dim, "Drag a circle up/down or sideways. Elbows and knees only bend; nothing twists.");
 
         // Undo / Redo / Reset, always in reach.
         var posed = Joints.Target();

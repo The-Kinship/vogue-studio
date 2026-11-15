@@ -9,8 +9,9 @@ using Dalamud.Game.ClientState.Objects.Types;
 namespace VogueStudio;
 
 /// <summary>
-/// Click-and-drag bending. When you drag a joint's circle, the joint turns like a paper doll's:
-/// around the line from the camera to the joint, following your mouse around the circle.
+/// Doll-style dragging. Each body part only moves the ways a doll's would (elbows and knees are hinges,
+/// nothing twists along its own length). Drag up or down and the part moves up or down on screen; drag sideways
+/// and it moves sideways. Once a drag starts in one direction it locks to that one movement until you let go.
 /// The edited pose is handed to Brio, which holds it on the character.
 /// </summary>
 public static class Posing
@@ -18,18 +19,19 @@ public static class Posing
     /// <summary>A short line about what's happening or what went wrong ("" when all is fine).</summary>
     public static string Message { get; private set; } = "";
 
+    /// <summary>How the drag is locked right now, for the window ("" when not dragging).</summary>
+    public static string Locked { get; private set; } = "";
+
     private sealed class Drag
     {
         public required IGameObject Actor;
-        public required string Bone;
-        public required JsonNode Pose;             // the pose when the drag started
-        public required Quaternion StartLocal;     // the joint's own turn when the drag started
-        public required Vector3 Axis;              // camera-to-joint line, in the world
-        public required float Sign;                // which way round the world turn shows on screen
-        public required Quaternion Skeleton;       // the whole character's turn
-        public required Quaternion Parent;         // the parent joint's turn
-        public required Vector2 JointScreen;
+        public required BodyPart Part;
+        public required JsonNode Pose;            // the pose when the drag started
+        public required Quaternion StartLocal;    // the part's own turn when the drag started
+        public required List<Vector3> Axes;       // allowed axes (parent joint's frame)
+        public required List<Vector2> ScreenMove; // how the tip moves on screen per unit of turn, for each axis
         public required Vector2 MouseStart;
+        public int Axis = -1;                     // the locked axis (-1 = not decided yet)
         public float LastAngle;
         public long LastSent;
     }
@@ -42,65 +44,99 @@ public static class Posing
     public static bool CanUndo => undo.Count > 0;
     public static bool CanRedo => redo.Count > 0;
 
-    /// <summary>Mouse pressed on a joint's circle.</summary>
-    public static void Start(IGameObject actor, string bone, Vector2 mouse)
+    /// <summary>The mouse moved a few pixels while pressed on a part's circle.</summary>
+    public static void Start(IGameObject actor, BodyPart part, Vector2 mouse)
     {
         drag = null;
+        Locked = "";
         var json = BrioIpc.GetPose(actor);
         if (json == null) { Message = BrioIpc.LastError; return; }
         JsonNode? pose;
         try { pose = JsonNode.Parse(json); } catch (Exception) { pose = null; }
-        var rotText = pose?["Bones"]?[bone]?["Rotation"]?.GetValue<string>();
+        var rotText = pose?["Bones"]?[part.Bone]?["Rotation"]?.GetValue<string>();
         if (pose == null || rotText == null || !TryParseQuat(rotText, out var local))
         {
             Message = "Brio's pose doesn't have this body part, so it can't be moved.";
             return;
         }
 
-        var info = Joints.Info(actor, bone);
-        if (info is not { } bi) { Message = "Couldn't find this joint on the character."; return; }
-        if (!Plugin.GameGui.WorldToScreen(bi.World, out var jointScreen)) { Message = "This joint is off screen."; return; }
-        if (!ViewAxis(bi.World, jointScreen, out var axis)) { Message = "Couldn't work out the camera direction here."; return; }
+        var rig = Joints.RigFor(actor, part);
+        if (rig == null || rig.Axes.Count == 0) { Message = "Couldn't find this body part on the character."; return; }
+        if (!Plugin.GameGui.WorldToScreen(rig.Tip, out var tipScreen)) { Message = "This body part is off screen."; return; }
+
+        // For each allowed movement: which way (and how far) the tip moves on screen for a small turn.
+        const float step = 0.05f;
+        var screenMoves = new List<Vector2>();
+        foreach (var a in rig.Axes)
+        {
+            var worldAxis = Vector3.Normalize(Vector3.Transform(Vector3.Transform(a, rig.ParentRotation), rig.SkeletonRotation));
+            var moved = rig.Joint + Vector3.Transform(rig.Tip - rig.Joint, Quaternion.CreateFromAxisAngle(worldAxis, step));
+            screenMoves.Add(Plugin.GameGui.WorldToScreen(moved, out var ms) ? (ms - tipScreen) / step : Vector2.Zero);
+        }
 
         drag = new Drag
         {
-            Actor = actor, Bone = bone, Pose = pose, StartLocal = local, Axis = axis,
-            Sign = ScreenSign(bi.World, jointScreen, axis),
-            Skeleton = bi.SkeletonRotation, Parent = bi.ParentModelRotation,
-            JointScreen = jointScreen, MouseStart = mouse,
+            Actor = actor, Part = part, Pose = pose, StartLocal = local,
+            Axes = rig.Axes, ScreenMove = screenMoves, MouseStart = mouse,
         };
         undo.Push(json);
         redo.Clear();
         Message = "";
     }
 
-    /// <summary>Mouse moved while held: turn the joint to follow it (sent to Brio a few times a second).</summary>
+    /// <summary>Mouse moved while held: turn the part around its locked axis (sent to Brio a few times a second).</summary>
     public static void Update(Vector2 mouse, bool final = false)
     {
         if (drag == null) return;
-        var from = drag.MouseStart - drag.JointScreen;
-        var to = mouse - drag.JointScreen;
-        if (to.Length() < 6f || from.Length() < 1f) { if (final) drag = null; return; }
+        var moved = mouse - drag.MouseStart;
 
-        var angle = SignedAngle(from, to) * Plugin.Config.DragStrength;
+        // Lock to one movement: the one whose on-screen direction best matches how you started dragging.
+        if (drag.Axis < 0)
+        {
+            if (moved.Length() < 10f) { if (final) Finish(); return; }
+            var dir = Vector2.Normalize(moved);
+            var best = -1;
+            var bestScore = 0f;
+            for (var i = 0; i < drag.ScreenMove.Count; i++)
+            {
+                var sm = drag.ScreenMove[i];
+                if (sm.Length() < 5f) continue;   // this movement barely shows from this camera angle
+                var score = MathF.Abs(Vector2.Dot(Vector2.Normalize(sm), dir));
+                if (score > bestScore) { best = i; bestScore = score; }
+            }
+            if (best < 0) { Message = "This part can't move that way from this camera angle. Try turning the camera."; if (final) Finish(); return; }
+            drag.Axis = best;
+            Locked = MathF.Abs(dir.Y) >= MathF.Abs(dir.X) ? "up / down" : "side to side";
+        }
+
+        // How far to turn: the mouse's movement along the tip's on-screen direction, so the tip follows the mouse.
+        var screen = drag.ScreenMove[drag.Axis];
+        var angle = Vector2.Dot(moved, screen) / screen.LengthSquared() * Plugin.Config.DragStrength;
+        angle = Math.Clamp(angle, -MathF.PI, MathF.PI);
+
         var now = Environment.TickCount64;
         if (!final && (now - drag.LastSent < 90 || MathF.Abs(angle - drag.LastAngle) < 0.004f)) return;
         drag.LastSent = now;
         drag.LastAngle = angle;
 
-        // The turn in the world, converted into the joint's own turn:
-        // world turn of the joint = skeleton * parent * local, so the new local = (skeleton*parent)^-1 * turn * (skeleton*parent) * local.
-        var world = Quaternion.CreateFromAxisAngle(drag.Axis, angle * drag.Sign);
-        var frame = drag.Skeleton * drag.Parent;
-        var newLocal = Quaternion.Normalize(Quaternion.Inverse(frame) * world * frame * drag.StartLocal);
-
-        drag.Pose["Bones"]![drag.Bone]!["Rotation"] = FormatQuat(newLocal);
+        // Turn around the chosen axis, measured in the parent joint's frame: no twisting, doll style.
+        var turn = Quaternion.CreateFromAxisAngle(drag.Axes[drag.Axis], angle);
+        var newLocal = Quaternion.Normalize(turn * drag.StartLocal);
+        drag.Pose["Bones"]![drag.Part.Bone]!["Rotation"] = FormatQuat(newLocal);
         if (!BrioIpc.LoadPose(drag.Actor, drag.Pose.ToJsonString())) Message = BrioIpc.LastError;
-        if (final) drag = null;
+        if (final) Finish();
     }
 
     /// <summary>Mouse let go.</summary>
     public static void End(Vector2 mouse) => Update(mouse, final: true);
+
+    private static void Finish()
+    {
+        // A click without a real drag changes nothing, so it shouldn't leave an Undo step behind.
+        if (drag != null && drag.Axis < 0 && undo.Count > 0) undo.Pop();
+        drag = null;
+        Locked = "";
+    }
 
     public static void Undo(IGameObject actor)
     {
@@ -123,45 +159,6 @@ public static class Posing
         var now = BrioIpc.GetPose(actor);
         if (now != null) { undo.Push(now); redo.Clear(); }
         if (!BrioIpc.ResetPose(actor)) Message = BrioIpc.LastError.Length > 0 ? BrioIpc.LastError : "Brio couldn't reset the pose.";
-    }
-
-    // ---------- Math ----------
-
-    /// <summary>
-    /// The direction from the camera through the joint, found by nudging a point around the joint and seeing which
-    /// direction doesn't move it on screen.
-    /// </summary>
-    private static bool ViewAxis(Vector3 p, Vector2 s, out Vector3 axis)
-    {
-        axis = default;
-        const float h = 0.05f;
-        if (!Plugin.GameGui.WorldToScreen(p + new Vector3(h, 0, 0), out var sx)) return false;
-        if (!Plugin.GameGui.WorldToScreen(p + new Vector3(0, h, 0), out var sy)) return false;
-        if (!Plugin.GameGui.WorldToScreen(p + new Vector3(0, 0, h), out var sz)) return false;
-        var rowX = new Vector3(sx.X - s.X, sy.X - s.X, sz.X - s.X);
-        var rowY = new Vector3(sx.Y - s.Y, sy.Y - s.Y, sz.Y - s.Y);
-        var c = Vector3.Cross(rowX, rowY);
-        if (c.LengthSquared() < 1e-8f) return false;
-        axis = Vector3.Normalize(c);
-        return true;
-    }
-
-    /// <summary>+1 or -1: whether turning around the axis goes the same way round on screen as the mouse angle.</summary>
-    private static float ScreenSign(Vector3 p, Vector2 s, Vector3 axis)
-    {
-        var helper = MathF.Abs(axis.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX;
-        var arm = Vector3.Normalize(Vector3.Cross(axis, helper)) * 0.3f;
-        var turned = Vector3.Transform(arm, Quaternion.CreateFromAxisAngle(axis, 0.2f));
-        if (!Plugin.GameGui.WorldToScreen(p + arm, out var a) || !Plugin.GameGui.WorldToScreen(p + turned, out var b)) return 1f;
-        return SignedAngle(a - s, b - s) >= 0 ? 1f : -1f;
-    }
-
-    private static float SignedAngle(Vector2 a, Vector2 b)
-    {
-        var d = MathF.Atan2(b.Y, b.X) - MathF.Atan2(a.Y, a.X);
-        while (d > MathF.PI) d -= 2 * MathF.PI;
-        while (d < -MathF.PI) d += 2 * MathF.PI;
-        return d;
     }
 
     private static bool TryParseQuat(string text, out Quaternion q)

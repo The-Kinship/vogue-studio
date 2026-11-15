@@ -79,7 +79,7 @@ public static class Overlay
                     }
                     if (ImGui.IsItemActive() && pressedBone == part.Bone)
                     {
-                        if (!Posing.Dragging && Vector2.Distance(mouse, pressAt) > 4f) Posing.Start(actor, part.Bone, pressAt);
+                        if (!Posing.Dragging && Vector2.Distance(mouse, pressAt) > 4f) Posing.Start(actor, part, pressAt);
                         if (Posing.Dragging) Posing.Update(mouse);
                     }
                     if (ImGui.IsItemDeactivated() && pressedBone == part.Bone)
