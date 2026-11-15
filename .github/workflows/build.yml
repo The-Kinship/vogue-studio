@@ -1,0 +1,106 @@
+name: Build plugin
+on:
+  push:
+    branches: [ main ]
+    paths-ignore: [ 'repo.json' ]
+  workflow_dispatch:
+permissions:
+  contents: write
+# Builds queue up one after another instead of running at the same time, so two uploads in a row can't collide.
+concurrency:
+  group: build-vogue-studio
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Download Dalamud
+        run: |
+          curl -fsSL -o dalamud.zip https://goatcorp.github.io/dalamud-distrib/latest.zip
+          mkdir -p "$HOME/dalamud"
+          unzip -q dalamud.zip -d "$HOME/dalamud"
+          echo "DALAMUD_HOME=$HOME/dalamud" >> "$GITHUB_ENV"
+      - name: Build
+        run: dotnet build VogueStudio/VogueStudio.csproj -c Release
+      - name: Collect the plugin files
+        run: |
+          ZIP=$(find VogueStudio/bin -name latest.zip | head -1)
+          echo "Found package: $ZIP"
+          cp "$ZIP" latest.zip
+          # Dalamud shows the icon of an installed plugin from images/icon.png inside the package, so put it there.
+          zip -q latest.zip images/icon.png
+          mkdir -p out/VogueStudio
+          unzip -q "$ZIP" -d out/VogueStudio
+          ls -la out/VogueStudio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VogueStudio
+          path: out/VogueStudio
+      - name: Publish the installable package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest latest.zip --title "Latest build" --notes "Installed and updated through the custom repo link. Nothing to download here by hand." --target "$GITHUB_SHA"
+      - name: Update repo.json
+        run: |
+          cat > make_repo_json.py <<'PYEOF'
+          """Builds repo.json (the file Dalamud reads) from the plugin package the SDK just made."""
+          import json, sys, time, zipfile
+
+          zip_path, out_path = sys.argv[1], sys.argv[2]
+          OWNER_REPO = "The-Kinship/vogue-studio"
+
+          with zipfile.ZipFile(zip_path) as z:
+              name = next(n for n in z.namelist() if n.endswith("VogueStudio.json"))
+              manifest = json.loads(z.read(name).decode("utf-8-sig"))
+
+          download = f"https://github.com/{OWNER_REPO}/releases/download/latest/latest.zip"
+          entry = {
+              "Author": manifest.get("Author", "The Kinship"),
+              "Name": manifest.get("Name", "Rafter Cat's Vogue Studio"),
+              "InternalName": manifest.get("InternalName", "VogueStudio"),
+              "AssemblyVersion": manifest["AssemblyVersion"],
+              "Punchline": manifest.get("Punchline", ""),
+              "Description": manifest.get("Description", ""),
+              "ApplicableVersion": manifest.get("ApplicableVersion", "any"),
+              "RepoUrl": manifest.get("RepoUrl", f"https://github.com/{OWNER_REPO}"),
+              "Tags": manifest.get("Tags", []),
+              "IconUrl": f"https://raw.githubusercontent.com/{OWNER_REPO}/main/images/icon.png",
+              "DalamudApiLevel": manifest["DalamudApiLevel"],
+              "IsHide": False,
+              "IsTestingExclusive": False,
+              "LastUpdate": int(time.time()),
+              "DownloadLinkInstall": download,
+              "DownloadLinkTesting": download,
+              "DownloadLinkUpdate": download,
+          }
+          # What the Plugin Installer shows under "changelog": the text of changelog.txt at the top of the repo (the same blurb you post in Discord).
+          try:
+              with open("changelog.txt", encoding="utf-8") as c:
+                  text = c.read().strip()
+              if text:
+                  entry["Changelog"] = text
+          except FileNotFoundError:
+              pass
+          with open(out_path, "w", encoding="utf-8") as f:
+              json.dump([entry], f, indent=2)
+          print(json.dumps(entry, indent=2))
+          PYEOF
+          python3 make_repo_json.py latest.zip repo.json
+          rm make_repo_json.py
+          git config user.name "vogue-studio-build"
+          git config user.email "actions@users.noreply.github.com"
+          git add repo.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Update repo.json"
+          # If something else pushed in the meantime, take its changes and try again.
+          for i in 1 2 3 4 5; do
+            git pull --rebase -X theirs origin main && git push && exit 0
+            sleep 3
+          done
+          exit 1
