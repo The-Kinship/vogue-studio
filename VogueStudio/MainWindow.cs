@@ -40,7 +40,7 @@ public sealed class MainWindow : Window
             ImGui.PopTextWrapPos();
         }
 
-        var selected = Joints.Parts.FirstOrDefault(p => p.Bone == Overlay.Selected);
+        var selected = Overlay.Current().FirstOrDefault(p => p.Bone == Overlay.Selected) ?? Joints.Parts.FirstOrDefault(p => p.Bone == Overlay.Selected);
         ImGui.Spacing();
         ImGui.TextColored(Gold, Overlay.Selected == Overlay.WholeBody ? "Selected: Whole body (the diamond at the feet)"
             : selected != null ? "Selected: " + selected.Name : "Click a circle to select a body part.");
@@ -76,15 +76,33 @@ public sealed class MainWindow : Window
             }
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Puts the whole character back where they were standing, facing the original way (you can Undo this).");
         }
+        // Detail mode for hands and feet.
+        if (posed != null && Plugin.ClientState.IsGPosing)
+        {
+            if (Overlay.DetailRoot.Length > 0)
+            {
+                if (ImGui.Button("< Back to the whole body")) Overlay.LeaveDetail();
+                ImGui.SameLine();
+                ImGui.TextColored(Dim, "Zoom the camera in for easier clicking.");
+            }
+            else if (selected != null && (selected.Bone.StartsWith("j_te") || selected.Bone.StartsWith("j_asi_d")))
+            {
+                if (ImGui.Button(selected.Bone.StartsWith("j_te") ? $"Detail: {selected.Name}'s fingers" : $"Detail: {selected.Name}'s toes"))
+                    Overlay.EnterDetail(posed, selected.Bone);
+            }
+        }
         ImGui.Separator();
 
         // --- Body parts, big and easy to click ---
         if (ImGui.BeginChild("##parts", new Vector2(0, -190)))
         {
-            if (ImGui.Selectable("   Whole body (move and turn)##whole", Overlay.Selected == Overlay.WholeBody, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetTextLineHeight() * 1.4f)))
+            if (Overlay.DetailRoot.Length == 0
+                && ImGui.Selectable("   Whole body (move and turn)##whole", Overlay.Selected == Overlay.WholeBody, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetTextLineHeight() * 1.4f)))
                 Overlay.Selected = Overlay.WholeBody;
+            if (Overlay.DetailRoot.Length > 0 && Overlay.Current().Count() <= 1)
+                ImGui.TextColored(Warn, "No finger or toe joints found on this character.");
             string group = "";
-            foreach (var part in Joints.Shown())
+            foreach (var part in Overlay.Current())
             {
                 if (part.Group != group)
                 {

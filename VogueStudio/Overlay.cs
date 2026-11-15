@@ -27,6 +27,27 @@ public static class Overlay
 
     public const string WholeBody = "#whole";
 
+    /// <summary>Detail mode: the hand or foot whose fingers/toes are shown ("" = normal body circles).</summary>
+    public static string DetailRoot { get; private set; } = "";
+    private static List<BodyPart> detailParts = new();
+
+    public static void EnterDetail(Dalamud.Game.ClientState.Objects.Types.IGameObject actor, string root)
+    {
+        detailParts = Joints.DetailParts(actor, root);
+        DetailRoot = root;
+        Selected = root;
+    }
+
+    public static void LeaveDetail()
+    {
+        Selected = DetailRoot;
+        DetailRoot = "";
+        detailParts = new();
+    }
+
+    /// <summary>The circles to show: the fingers/toes in Detail mode, otherwise the body parts.</summary>
+    public static IEnumerable<BodyPart> Current() => DetailRoot.Length > 0 ? detailParts : Joints.Shown();
+
     /// <summary>The "Whole body" handle: a diamond at the character's feet. Drag to move them, mouse wheel to turn them.</summary>
     private static void DrawWholeBody(Dalamud.Game.ClientState.Objects.Types.IGameObject actor, List<(Vector2 Pos, string Text, bool Strong)> labels,
         float r, uint dark, uint gold, uint white, uint fill)
@@ -79,13 +100,13 @@ public static class Overlay
         if (actor == null) { Problem = "No character found to pose."; return; }
 
         Dictionary<string, Vector3> world;
-        try { world = Joints.WorldPositions(actor); }
+        try { world = Joints.WorldPositions(actor, Current()); }
         catch (Exception ex) { Plugin.Log.Verbose(ex, "Couldn't read the skeleton."); Problem = "Couldn't read the character's skeleton."; return; }
         if (world.Count == 0) { Problem = "This character's joints couldn't be found."; return; }
         Problem = "";
         if (!cfg.ShowCircles) return;
 
-        var r = cfg.CircleSize;
+        var r = DetailRoot.Length > 0 ? MathF.Max(6f, cfg.CircleSize * 0.55f) : cfg.CircleSize;   // smaller circles for fingers and toes
         var dark = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.8f));
         var gold = ImGui.ColorConvertFloat4ToU32(Gold);
         var white = ImGui.ColorConvertFloat4ToU32(White);
@@ -97,7 +118,7 @@ public static class Overlay
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
         try
         {
-            foreach (var part in Joints.Shown())
+            foreach (var part in Current())
             {
                 if (!world.TryGetValue(part.Bone, out var pos)) continue;
                 if (!Plugin.GameGui.WorldToScreen(pos, out var screen)) continue;
@@ -147,7 +168,7 @@ public static class Overlay
                 }
                 ImGui.End();
             }
-            DrawWholeBody(actor, labels, r, dark, gold, white, fill);
+            if (DetailRoot.Length == 0) DrawWholeBody(actor, labels, r, dark, gold, white, fill);
         }
         finally { ImGui.PopStyleVar(3); }
 

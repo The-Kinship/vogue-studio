@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Types;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
@@ -18,10 +19,16 @@ public enum MoveKind
     Hinge,
     /// <summary>Feet: point and flex only.</summary>
     FootHinge,
+    /// <summary>Finger knuckles: curl toward the palm (and a little back), nothing else.</summary>
+    Finger,
+    /// <summary>Thumb base: moves two ways, never twists.</summary>
+    Thumb,
+    /// <summary>Toes: curl down or lift up.</summary>
+    Toe,
 }
 
 /// <summary>A body part you can pick: its name, the joint it turns at, the joint at its far end (to see where it points), and how it may move.</summary>
-public sealed record BodyPart(string Name, string Bone, string? End, string Group, MoveKind Kind, bool Simple = true);
+public sealed record BodyPart(string Name, string Bone, string? End, string Group, MoveKind Kind, bool Simple = true, bool Detail = false);
 
 /// <summary>Everything needed to move one part: where it is, where it points, and its doll-style movement directions.</summary>
 public sealed class Rig
@@ -75,6 +82,56 @@ public static unsafe class Joints
             if (p.Simple || !Plugin.Config.SimpleMode) yield return p;
     }
 
+    private static readonly string[] Digits = { "oya", "hito", "naka", "kusu", "ko" };
+    private static readonly string[] FingerNames = { "Thumb", "Index finger", "Middle finger", "Ring finger", "Little finger" };
+    private static readonly string[] ToeNames = { "Big toe", "Second toe", "Middle toe", "Fourth toe", "Little toe" };
+    private static readonly string[] SegmentNames = { "base", "middle", "tip", "end" };
+
+    /// <summary>
+    /// Detail mode: the finger joints of a hand (j_te_l / j_te_r) or the toe joints of a foot (j_asi_d_l / j_asi_d_r),
+    /// read from the bones this character actually has (more with IVCS), plus the hand or foot itself.
+    /// </summary>
+    public static List<BodyPart> DetailParts(IGameObject actor, string root)
+    {
+        var result = new List<BodyPart>();
+        var rootPart = Array.Find(Parts, p => p.Bone == root);
+        if (rootPart != null) result.Add(rootPart);
+        var isHand = root.StartsWith("j_te");
+        var side = root.EndsWith("_l") ? "Left" : "Right";
+        var suffix = root.EndsWith("_l") ? "_l" : "_r";
+        var found = new List<(int Digit, int Segment, string Bone)>();
+        foreach (var name in Subtree(actor, root))
+        {
+            if (!name.EndsWith(suffix)) continue;
+            var core = name[..^2];                                    // e.g. "j_hito_b" or "iv_asi_oya_a"
+            var head = isHand ? new[] { "j_", "iv_" } : new[] { "j_asi_", "iv_asi_" };
+            foreach (var h in head)
+            {
+                if (!core.StartsWith(h)) continue;
+                var rest = core[h.Length..].Split('_');               // e.g. ["hito", "b"]
+                if (rest.Length != 2 || rest[1].Length != 1) continue;
+                var digit = Array.IndexOf(Digits, rest[0]);
+                var seg = rest[1][0] - 'a';
+                if (digit >= 0 && seg is >= 0 and < 4) found.Add((digit, seg, name));
+            }
+        }
+        if (!isHand)
+        {
+            // Without IVCS there are no separate toes, just the front of the foot.
+            var toes = "j_asi_e" + suffix;
+            if (found.Count == 0 && Subtree(actor, root).Contains(toes))
+                result.Add(new BodyPart($"{side} toes", toes, null, $"{side} foot", MoveKind.Toe, true, true));
+        }
+        foreach (var (digit, seg, bone) in found.OrderBy(f => f.Digit).ThenBy(f => f.Segment))
+        {
+            var label = isHand ? FingerNames[digit] : ToeNames[digit];
+            var kind = !isHand ? MoveKind.Toe : digit == 0 && seg == 0 ? MoveKind.Thumb : MoveKind.Finger;
+            result.Add(new BodyPart($"{side} {label.ToLowerInvariant()} ({SegmentNames[seg]})", bone, null,
+                $"{side} {(isHand ? "hand" : "foot")}: {label}", kind, true, true));
+        }
+        return result;
+    }
+
     /// <summary>The character being posed: your GPose target, or yourself in GPose.</summary>
     public static IGameObject? Target()
     {
@@ -114,6 +171,12 @@ public static unsafe class Joints
                 else if (part.End != null && name == part.End) end = i;
             }
             if (index < 0) continue;
+            if (part.Detail && end < 0)
+            {
+                // Fingers and toes: the next joint along is the first bone hanging off this one.
+                for (var i = index + 1; i < Math.Min(count, hk->ParentIndices.Length); i++)
+                    if (hk->ParentIndices[i] == index) { end = i; break; }
+            }
 
             var parent = index < hk->ParentIndices.Length ? hk->ParentIndices[index] : (short)-1;
             var rig = new Rig { SkeletonRotation = tRot };
@@ -159,8 +222,22 @@ public static unsafe class Joints
                     axes.Add(SafeCross(refDir, Forward, Side));
                     break;
                 case MoveKind.FootHinge:
+                case MoveKind.Finger:
+                case MoveKind.Toe:
                     axes.Add(SafeCross(refDir, Up, Side));
                     break;
+                case MoveKind.Thumb:
+                {
+                    var basis = Quaternion.Normalize(rig.ParentRotation * Quaternion.Inverse(refParent));
+                    var cur = end >= 0 ? Pos(pose->ModelPose[end]) - Pos(pose->ModelPose[index]) : Vector3.Zero;
+                    var dirNow = cur.LengthSquared() > 1e-8f ? Vector3.Normalize(cur) : Vector3.Transform(refDir, basis);
+                    var candidates = new List<Vector3> { Side, Up, Forward };
+                    candidates.Sort((a, b) => MathF.Abs(Vector3.Dot(Vector3.Transform(a, basis), dirNow))
+                        .CompareTo(MathF.Abs(Vector3.Dot(Vector3.Transform(b, basis), dirNow))));
+                    axes.Add(candidates[0]);
+                    axes.Add(candidates[1]);
+                    break;
+                }
             }
             var toParent = Quaternion.Inverse(refParent);
             var jointX = index < n ? refPos[index].X : 0f;
@@ -189,6 +266,9 @@ public static unsafe class Joints
         bool MostlyUp() => MathF.Abs(Vector3.Dot(tipMove, Up)) >= MathF.Abs(Vector3.Dot(tipMove, Forward));
         bool MostlyForward() => MathF.Abs(Vector3.Dot(tipMove, Forward)) >= MathF.Abs(Vector3.Dot(tipMove, Side));
         var bone = part.Bone;
+        if (part.Kind == MoveKind.Finger) return R(100, 20, Toward(-Up));   // curl toward the palm, a little back
+        if (part.Kind == MoveKind.Toe) return R(40, 50, Toward(-Up));       // curl down 40, lift up 50
+        if (part.Kind == MoveKind.Thumb) return (-50f, 50f);
 
         if (bone.StartsWith("j_asi_a"))   // leg at the hip: kick forward/back, or out/in
             return MostlyForward() ? R(120, 40, Toward(Forward)) : R(80, 25, Toward(jointX >= 0 ? Side : -Side));
@@ -304,7 +384,7 @@ public static unsafe class Joints
         new(t.Rotation.X, t.Rotation.Y, t.Rotation.Z, t.Rotation.W);
 
     /// <summary>World positions of the shown parts' joints right now (bones the character doesn't have are left out).</summary>
-    public static Dictionary<string, Vector3> WorldPositions(IGameObject actor)
+    public static Dictionary<string, Vector3> WorldPositions(IGameObject actor, IEnumerable<BodyPart> parts)
     {
         var result = new Dictionary<string, Vector3>();
         var go = (GameObjectStruct*)actor.Address;
@@ -313,7 +393,7 @@ public static unsafe class Joints
         if (skel == null || skel->PartialSkeletons == null) return result;
 
         var wanted = new HashSet<string>();
-        foreach (var p in Parts) wanted.Add(p.Bone);
+        foreach (var p in parts) wanted.Add(p.Bone);
 
         var t = skel->Transform;
         var tPos = new Vector3(t.Position.X, t.Position.Y, t.Position.Z);
