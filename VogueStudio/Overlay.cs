@@ -15,6 +15,10 @@ public static class Overlay
     public static string Selected { get; set; } = "";
     /// <summary>The body part under the mouse this frame ("" = none).</summary>
     public static string Hovered { get; private set; } = "";
+    /// <summary>Where the mouse was pressed on a circle (a drag starts once it moves a few pixels).</summary>
+    private static Vector2 pressAt;
+    private static string pressedBone = "";
+
     /// <summary>A short line about why nothing is showing ("" when circles are up).</summary>
     public static string Problem { get; private set; } = "";
 
@@ -48,7 +52,7 @@ public static class Overlay
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
         try
         {
-            foreach (var part in Joints.Parts)
+            foreach (var part in Joints.Shown())
             {
                 if (!world.TryGetValue(part.Bone, out var pos)) continue;
                 if (!Plugin.GameGui.WorldToScreen(pos, out var screen)) continue;
@@ -63,8 +67,26 @@ public static class Overlay
                 {
                     ImGui.InvisibleButton("hit", size);
                     var hovered = ImGui.IsItemHovered();
-                    if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) Selected = Selected == part.Bone ? "" : part.Bone;
                     if (hovered) Hovered = part.Bone;
+
+                    // Press: select it. Hold and move: bend it (through Brio). Let go: done.
+                    var mouse = ImGui.GetMousePos();
+                    if (ImGui.IsItemActivated())
+                    {
+                        Selected = part.Bone;
+                        pressAt = mouse;
+                        pressedBone = part.Bone;
+                    }
+                    if (ImGui.IsItemActive() && pressedBone == part.Bone)
+                    {
+                        if (!Posing.Dragging && Vector2.Distance(mouse, pressAt) > 4f) Posing.Start(actor, part.Bone, pressAt);
+                        if (Posing.Dragging) Posing.Update(mouse);
+                    }
+                    if (ImGui.IsItemDeactivated() && pressedBone == part.Bone)
+                    {
+                        if (Posing.Dragging) Posing.End(mouse);
+                        pressedBone = "";
+                    }
 
                     var selected = Selected == part.Bone;
                     var draw = ImGui.GetWindowDrawList();

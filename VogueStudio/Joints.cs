@@ -8,7 +8,10 @@ using GameObjectStruct = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 namespace VogueStudio;
 
 /// <summary>A body part you can pick: its friendly name and the game's bone name.</summary>
-public sealed record BodyPart(string Name, string Bone, string Group);
+public sealed record BodyPart(string Name, string Bone, string Group, bool Simple = true);
+
+/// <summary>What's needed to bend one joint: where it is, how the whole character is turned, and how its parent joint is turned.</summary>
+public readonly record struct BoneInfo(Vector3 World, Quaternion SkeletonRotation, Quaternion ParentModelRotation);
 
 /// <summary>
 /// Reads where your character's joints are (read only), from the game's own skeleton,
@@ -20,16 +23,16 @@ public static unsafe class Joints
     public static readonly BodyPart[] Parts =
     {
         new("Hips", "j_kosi", "Body"),
-        new("Lower back", "j_sebo_a", "Body"),
-        new("Middle back", "j_sebo_b", "Body"),
+        new("Lower back", "j_sebo_a", "Body", false),
+        new("Middle back", "j_sebo_b", "Body", false),
         new("Chest", "j_sebo_c", "Body"),
         new("Neck", "j_kubi", "Body"),
         new("Head", "j_kao", "Body"),
-        new("Left shoulder", "j_sako_l", "Left arm"),
+        new("Left shoulder", "j_sako_l", "Left arm", false),
         new("Left upper arm", "j_ude_a_l", "Left arm"),
         new("Left forearm", "j_ude_b_l", "Left arm"),
         new("Left hand", "j_te_l", "Left arm"),
-        new("Right shoulder", "j_sako_r", "Right arm"),
+        new("Right shoulder", "j_sako_r", "Right arm", false),
         new("Right upper arm", "j_ude_a_r", "Right arm"),
         new("Right forearm", "j_ude_b_r", "Right arm"),
         new("Right hand", "j_te_r", "Right arm"),
@@ -41,12 +44,60 @@ public static unsafe class Joints
         new("Right foot", "j_asi_d_r", "Right leg"),
     };
 
+    /// <summary>The parts shown right now (Simple mode leaves out the extra back and shoulder joints).</summary>
+    public static IEnumerable<BodyPart> Shown()
+    {
+        foreach (var p in Parts)
+            if (p.Simple || !Plugin.Config.SimpleMode) yield return p;
+    }
+
     /// <summary>The character being posed: your GPose target, or yourself in GPose.</summary>
     public static IGameObject? Target()
     {
         var t = Plugin.TargetManager.GPoseTarget;
         if (t != null) return t;
         return Plugin.ObjectTable[201];   // your own character's GPose copy
+    }
+
+    /// <summary>One joint's position, the character's turn, and its parent joint's turn (null if the bone isn't found).</summary>
+    public static BoneInfo? Info(IGameObject actor, string boneName)
+    {
+        var go = (GameObjectStruct*)actor.Address;
+        if (go == null || go->DrawObject == null) return null;
+        var skel = ((CharacterBase*)go->DrawObject)->Skeleton;
+        if (skel == null || skel->PartialSkeletons == null) return null;
+
+        var t = skel->Transform;
+        var tPos = new Vector3(t.Position.X, t.Position.Y, t.Position.Z);
+        var tScale = new Vector3(t.Scale.X, t.Scale.Y, t.Scale.Z);
+        var tRot = new Quaternion(t.Rotation.X, t.Rotation.Y, t.Rotation.Z, t.Rotation.W);
+
+        for (var s = 0; s < skel->PartialSkeletonCount; s++)
+        {
+            var pose = skel->PartialSkeletons[s].GetHavokPose(0);
+            if (pose == null || pose->Skeleton == null) continue;
+            var bones = pose->Skeleton->Bones;
+            var count = Math.Min(bones.Length, pose->ModelPose.Length);
+            for (var i = 0; i < count; i++)
+            {
+                if (bones[i].Name.String != boneName) continue;
+                var tr = pose->ModelPose[i].Translation;
+                var world = tPos + Vector3.Transform(new Vector3(tr.X, tr.Y, tr.Z) * tScale, tRot);
+                var parentRot = Quaternion.Identity;
+                var parents = pose->Skeleton->ParentIndices;
+                if (i < parents.Length)
+                {
+                    var pi = parents[i];
+                    if (pi >= 0 && pi < pose->ModelPose.Length)
+                    {
+                        var q = pose->ModelPose[pi].Rotation;
+                        parentRot = new Quaternion(q.X, q.Y, q.Z, q.W);
+                    }
+                }
+                return new BoneInfo(world, tRot, parentRot);
+            }
+        }
+        return null;
     }
 
     /// <summary>World positions of the main joints right now (bones the character doesn't have are left out).</summary>

@@ -26,6 +26,14 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        if (Config.Version < 2)
+        {
+            // New defaults: fewer, uncluttered circles.
+            Config.ShowLabels = false;
+            Config.SimpleMode = true;
+            Config.Version = 2;
+            Config.Save();
+        }
         window = new MainWindow();
         windows.AddWindow(window);
 

@@ -32,17 +32,40 @@ public sealed class MainWindow : Window
             ImGui.TextColored(Dim, "Posing: " + (actor?.Name.ToString() ?? "?"));
         }
 
+        if (Posing.Message.Length > 0)
+        {
+            ImGui.PushTextWrapPos(0f);
+            ImGui.TextColored(Warn, Posing.Message);
+            ImGui.PopTextWrapPos();
+        }
+
         var selected = Joints.Parts.FirstOrDefault(p => p.Bone == Overlay.Selected);
         ImGui.Spacing();
-        ImGui.TextColored(Gold, selected != null ? "Selected: " + selected.Name : "Click a circle (or a name below) to select a body part.");
-        ImGui.TextColored(Dim, "(Dragging to move parts comes in the next piece.)");
+        ImGui.TextColored(Gold, selected != null ? "Selected: " + selected.Name : "Click a circle to select a body part.");
+        ImGui.TextColored(Dim, "Drag a circle around its joint to bend it.");
+
+        // Undo / Redo / Reset, always in reach.
+        var actor = Joints.Target();
+        if (actor != null && Plugin.ClientState.IsGPosing)
+        {
+            if (!Posing.CanUndo) ImGui.BeginDisabled();
+            if (ImGui.Button("Undo")) Posing.Undo(actor);
+            if (!Posing.CanUndo) ImGui.EndDisabled();
+            ImGui.SameLine();
+            if (!Posing.CanRedo) ImGui.BeginDisabled();
+            if (ImGui.Button("Redo")) Posing.Redo(actor);
+            if (!Posing.CanRedo) ImGui.EndDisabled();
+            ImGui.SameLine();
+            if (ImGui.Button("Reset pose")) Posing.Reset(actor);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Puts the character back to their normal pose (you can Undo this).");
+        }
         ImGui.Separator();
 
         // --- Body parts, big and easy to click ---
-        if (ImGui.BeginChild("##parts", new Vector2(0, -110)))
+        if (ImGui.BeginChild("##parts", new Vector2(0, -160)))
         {
             string group = "";
-            foreach (var part in Joints.Parts)
+            foreach (var part in Joints.Shown())
             {
                 if (part.Group != group)
                 {
@@ -61,11 +84,18 @@ public sealed class MainWindow : Window
         ImGui.Separator();
         var show = cfg.ShowCircles;
         if (ImGui.Checkbox("Show circles (hide them for the picture)", ref show)) { cfg.ShowCircles = show; cfg.Save(); }
+        var simple = cfg.SimpleMode;
+        if (ImGui.Checkbox("Simple mode (only the main joints)", ref simple)) { cfg.SimpleMode = simple; cfg.Save(); }
         var labels = cfg.ShowLabels;
         if (ImGui.Checkbox("Show every body part's name", ref labels)) { cfg.ShowLabels = labels; cfg.Save(); }
         var size = cfg.CircleSize;
         ImGui.SetNextItemWidth(160f);
         if (ImGui.SliderFloat("Circle size", ref size, 8f, 40f, "%.0f")) cfg.CircleSize = size;
         if (ImGui.IsItemDeactivatedAfterEdit()) cfg.Save();
+        var strength = cfg.DragStrength;
+        ImGui.SetNextItemWidth(160f);
+        if (ImGui.SliderFloat("Drag strength", ref strength, 0.2f, 1.5f, "%.1fx")) cfg.DragStrength = strength;
+        if (ImGui.IsItemDeactivatedAfterEdit()) cfg.Save();
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Lower = finer, slower bending. 1 = the part follows your mouse.");
     }
 }
