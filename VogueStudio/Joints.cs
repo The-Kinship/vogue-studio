@@ -31,6 +31,8 @@ public sealed class Rig
     public Quaternion SkeletonRotation;   // the whole character's turn
     public Quaternion ParentRotation;     // the parent joint's current turn (character space)
     public List<Vector3> Axes = new();    // allowed movement axes, in the parent joint's own frame
+    public List<(float Min, float Max)> Limits = new();   // natural range for each axis, in radians from the standing pose
+    public Quaternion RefLocal = Quaternion.Identity;      // the part's turn in the standing pose (relative to its parent)
 }
 
 /// <summary>
@@ -153,10 +155,56 @@ public static unsafe class Joints
                     break;
             }
             var toParent = Quaternion.Inverse(refParent);
-            foreach (var a in axes) rig.Axes.Add(Vector3.Normalize(Vector3.Transform(a, toParent)));
+            var jointX = index < n ? refPos[index].X : 0f;
+            foreach (var a in axes)
+            {
+                rig.Axes.Add(Vector3.Normalize(Vector3.Transform(a, toParent)));
+                // Which way the far end moves for a positive turn, in the standing pose: decides which way is "forward", "up" etc.
+                var (lo, hi) = Range(part, a, Vector3.Cross(a, refDir), jointX);
+                rig.Limits.Add((lo * MathF.PI / 180f, hi * MathF.PI / 180f));
+            }
+            if (index < hk->ReferencePose.Length) rig.RefLocal = Rot(hk->ReferencePose[index]);
             return rig;
         }
         return null;
+    }
+
+    /// <summary>
+    /// A natural range for one movement, in degrees (negative to positive turn), measured from the standing pose.
+    /// "toward" is how far it may go in the named direction, "away" how far the other way.
+    /// </summary>
+    private static (float Lo, float Hi) Range(BodyPart part, Vector3 axis, Vector3 tipMove, float jointX)
+    {
+        // +1 if a positive turn moves the far end toward this direction.
+        float Toward(Vector3 want) => Vector3.Dot(tipMove, want) >= 0 ? 1f : -1f;
+        (float, float) R(float toward, float away, float sign) => sign > 0 ? (-away, toward) : (-toward, away);
+        bool MostlyUp() => MathF.Abs(Vector3.Dot(tipMove, Up)) >= MathF.Abs(Vector3.Dot(tipMove, Forward));
+        bool MostlyForward() => MathF.Abs(Vector3.Dot(tipMove, Forward)) >= MathF.Abs(Vector3.Dot(tipMove, Side));
+        var bone = part.Bone;
+
+        if (bone.StartsWith("j_asi_a"))   // leg at the hip: kick forward/back, or out/in
+            return MostlyForward() ? R(120, 40, Toward(Forward)) : R(80, 25, Toward(jointX >= 0 ? Side : -Side));
+        if (bone.StartsWith("j_asi_c")) return R(150, 5, Toward(-Forward));   // knee bends backwards
+        if (bone.StartsWith("j_asi_d")) return R(30, 50, Toward(Up));          // foot: flex up 30, point down 50
+        if (bone.StartsWith("j_ude_a"))   // arm at the shoulder: raise/lower, or forward/back
+            return MostlyUp() ? R(150, 60, Toward(Up)) : R(110, 50, Toward(Forward));
+        if (bone.StartsWith("j_sako"))    // shoulder shrug
+            return MostlyUp() ? R(30, 15, Toward(Up)) : R(25, 25, Toward(Forward));
+        if (bone.StartsWith("j_ude_b")) return R(150, 5, Toward(Forward));    // elbow bends forward
+        if (bone.StartsWith("j_te"))      // wrist: up/down more than side to side
+            return MostlyUp() ? R(75, 75, 1f) : R(35, 35, 1f);
+
+        // Back, chest, neck, head: bend forward/back (side axis), turn (up axis), lean (forward axis).
+        var (bendF, bendB, turn, lean) = bone switch
+        {
+            "j_kosi" => (60f, 40f, 90f, 40f),
+            "j_kubi" => (50f, 40f, 50f, 30f),
+            "j_kao" => (50f, 40f, 70f, 35f),
+            _ => (60f, 30f, 45f, 30f),
+        };
+        if (MathF.Abs(axis.X) > 0.9f) return R(bendF, bendB, Toward(Forward));
+        if (MathF.Abs(axis.Y) > 0.9f) return (-turn, turn);
+        return (-lean, lean);
     }
 
     /// <summary>
@@ -171,20 +219,30 @@ public static unsafe class Joints
         var skel = ((CharacterBase*)go->DrawObject)->Skeleton;
         if (skel == null || skel->PartialSkeletons == null || skel->PartialSkeletonCount == 0) return names;
 
-        // The main body skeleton: walk down from the bone through every child.
-        var body = skel->PartialSkeletons[0].GetHavokPose(0);
-        if (body == null || body->Skeleton == null) return names;
-        var hk = body->Skeleton;
-        var n = Math.Min(hk->Bones.Length, hk->ParentIndices.Length);
-        var inside = new bool[n];
-        for (var i = 0; i < n; i++)
+        // Walk down from the bone through every child, in the skeleton piece that has it
+        // (the body for most parts; the head can also live in the face skeleton).
+        var n = 0;
+        var inside = Array.Empty<bool>();
+        var home = -1;
+        for (var s = 0; s < skel->PartialSkeletonCount && home < 0; s++)
         {
-            var name = hk->Bones[i].Name.String;
-            var p = hk->ParentIndices[i];
-            // Parents always come before their children in the list, so one pass is enough.
-            inside[i] = name == boneName || (p >= 0 && p < i && inside[p]);
-            if (inside[i] && name != null) names.Add(name);
+            var pose = skel->PartialSkeletons[s].GetHavokPose(0);
+            if (pose == null || pose->Skeleton == null) continue;
+            var hk = pose->Skeleton;
+            var count = Math.Min(hk->Bones.Length, hk->ParentIndices.Length);
+            var flags = new bool[count];
+            var found = false;
+            for (var i = 0; i < count; i++)
+            {
+                var name = hk->Bones[i].Name.String;
+                var p = hk->ParentIndices[i];
+                // Parents always come before their children in the list, so one pass is enough.
+                flags[i] = name == boneName || (p >= 0 && p < i && flags[p]);
+                if (flags[i]) { found = true; if (name != null) names.Add(name); }
+            }
+            if (found) { home = s; n = count; inside = flags; }
         }
+        if (home != 0) return names;   // attached skeletons hang off the body, so only check them for body parts
 
         // Face, hair and other attached skeletons: included when they hang off a bone in the chain.
         for (var s = 1; s < skel->PartialSkeletonCount; s++)

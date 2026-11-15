@@ -22,6 +22,9 @@ public static class Posing
     /// <summary>How the drag is locked right now, for the window ("" when not dragging).</summary>
     public static string Locked { get; private set; } = "";
 
+    /// <summary>True while the drag is pushing against a joint stop.</summary>
+    public static bool AtStop { get; private set; }
+
     private sealed class Drag
     {
         public required IGameObject Actor;
@@ -31,6 +34,7 @@ public static class Posing
         public required List<Vector3> Axes;       // allowed axes (character space)
         public required Dictionary<string, (Vector3 Pos, Quaternion Rot)> Chain;  // the part and everything below it, as at the start
         public required List<Vector2> ScreenMove; // how the tip moves on screen per unit of turn, for each axis
+        public required List<(float Lo, float Hi)> Room;  // how far each axis may still turn each way from here (joint stops)
         public required Vector2 MouseStart;
         public int Axis = -1;                     // the locked axis (-1 = not decided yet)
         public float LastAngle;
@@ -55,7 +59,7 @@ public static class Posing
         JsonNode? pose;
         try { pose = JsonNode.Parse(json); } catch (Exception) { pose = null; }
         var bones = pose?["Bones"] as JsonObject;
-        if (pose == null || bones == null || !TryBone(bones, part.Bone, out var pivot, out _))
+        if (pose == null || bones == null || !TryBone(bones, part.Bone, out var pivot, out var pivotRot))
         {
             Message = "Brio's pose doesn't have this body part, so it can't be moved.";
             return;
@@ -65,6 +69,7 @@ public static class Posing
         var chain = new Dictionary<string, (Vector3, Quaternion)>();
         foreach (var name in Joints.Subtree(actor, part.Bone))
             if (TryBone(bones, name, out var bp, out var br)) chain[name] = (bp, br);
+        chain[part.Bone] = (pivot, pivotRot);   // always include the part itself
 
         var rig = Joints.RigFor(actor, part);
         if (rig == null || rig.Axes.Count == 0) { Message = "Couldn't find this body part on the character."; return; }
@@ -83,10 +88,29 @@ public static class Posing
             screenMoves.Add(Plugin.GameGui.WorldToScreen(moved, out var ms) ? (ms - tipScreen) / step : Vector2.Zero);
         }
 
+        // Joint stops: how far each movement already is from the standing pose, and so how much room is left.
+        var room = new List<(float, float)>();
+        var parentInv = Quaternion.Inverse(rig.ParentRotation);
+        var localNow = Quaternion.Normalize(parentInv * chain[part.Bone].Item2);
+        var fromStanding = Quaternion.Normalize(localNow * Quaternion.Inverse(rig.RefLocal));
+        var flex = Plugin.Config.Flexibility;
+        for (var i = 0; i < rig.Axes.Count; i++)
+        {
+            if (flex == 2) { room.Add((-MathF.PI, MathF.PI)); continue; }
+            var (lo, hi) = rig.Limits[i];
+            if (flex == 1) { lo *= 1.35f; hi *= 1.35f; }
+            var a = rig.Axes[i];
+            var now = 2f * MathF.Atan2(Vector3.Dot(new Vector3(fromStanding.X, fromStanding.Y, fromStanding.Z), a), fromStanding.W);
+            if (now > MathF.PI) now -= 2 * MathF.PI;
+            if (now < -MathF.PI) now += 2 * MathF.PI;
+            // Already past a stop (e.g. a pose from elsewhere)? It can still come back, just not go further.
+            room.Add((MathF.Min(lo - now, 0f), MathF.Max(hi - now, 0f)));
+        }
+
         drag = new Drag
         {
             Actor = actor, Part = part, Pose = pose, Pivot = pivot, Chain = chain,
-            Axes = modelAxes, ScreenMove = screenMoves, MouseStart = mouse,
+            Axes = modelAxes, ScreenMove = screenMoves, MouseStart = mouse, Room = room,
         };
         undo.Push(json);
         redo.Clear();
@@ -121,7 +145,10 @@ public static class Posing
         // How far to turn: the mouse's movement along the tip's on-screen direction, so the tip follows the mouse.
         var screen = drag.ScreenMove[drag.Axis];
         var angle = Vector2.Dot(moved, screen) / screen.LengthSquared() * Plugin.Config.DragStrength;
-        angle = Math.Clamp(angle, -MathF.PI, MathF.PI);
+        var (roomLo, roomHi) = drag.Room[drag.Axis];
+        var wanted = angle;
+        angle = Math.Clamp(angle, MathF.Max(roomLo, -MathF.PI), MathF.Min(roomHi, MathF.PI));
+        AtStop = MathF.Abs(wanted - angle) > 0.01f;
 
         var now = Environment.TickCount64;
         if (!final && (now - drag.LastSent < 90 || MathF.Abs(angle - drag.LastAngle) < 0.004f)) return;
@@ -150,6 +177,7 @@ public static class Posing
         if (drag != null && drag.Axis < 0 && undo.Count > 0) undo.Pop();
         drag = null;
         Locked = "";
+        AtStop = false;
     }
 
     public static void Undo(IGameObject actor)

@@ -12,6 +12,8 @@ public class Configuration : IPluginConfiguration
     public bool SimpleMode { get; set; } = true;
     /// <summary>How strongly a drag bends the joint (1 = follows the mouse).</summary>
     public float DragStrength { get; set; } = 1f;
+    /// <summary>Joint stops: 0 = normal, 1 = flexible (about a third more), 2 = no limits.</summary>
+    public int Flexibility { get; set; }
 
     /// <summary>Size of the joint circles on screen (radius in pixels).</summary>
     public float CircleSize { get; set; } = 16f;

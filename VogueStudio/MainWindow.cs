@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -42,7 +43,7 @@ public sealed class MainWindow : Window
         var selected = Joints.Parts.FirstOrDefault(p => p.Bone == Overlay.Selected);
         ImGui.Spacing();
         ImGui.TextColored(Gold, selected != null ? "Selected: " + selected.Name : "Click a circle to select a body part.");
-        if (Posing.Locked.Length > 0) ImGui.TextColored(Gold, "Moving " + Posing.Locked + " (let go to finish)");
+        if (Posing.Locked.Length > 0) ImGui.TextColored(Gold, "Moving " + Posing.Locked + (Posing.AtStop ? " - reached its limit" : " (let go to finish)"));
         else ImGui.TextColored(Dim, "Drag a circle up/down or sideways. Elbows and knees only bend; nothing twists.");
 
         // Undo / Redo / Reset, always in reach.
@@ -63,7 +64,7 @@ public sealed class MainWindow : Window
         ImGui.Separator();
 
         // --- Body parts, big and easy to click ---
-        if (ImGui.BeginChild("##parts", new Vector2(0, -160)))
+        if (ImGui.BeginChild("##parts", new Vector2(0, -190)))
         {
             string group = "";
             foreach (var part in Joints.Shown())
@@ -93,6 +94,15 @@ public sealed class MainWindow : Window
         ImGui.SetNextItemWidth(160f);
         if (ImGui.SliderFloat("Circle size", ref size, 8f, 40f, "%.0f")) cfg.CircleSize = size;
         if (ImGui.IsItemDeactivatedAfterEdit()) cfg.Save();
+        var flexNames = new[] { "Normal", "Flexible", "No limits" };
+        ImGui.SetNextItemWidth(160f);
+        if (ImGui.BeginCombo("Flexibility", flexNames[Math.Clamp(cfg.Flexibility, 0, 2)]))
+        {
+            for (var i = 0; i < 3; i++)
+                if (ImGui.Selectable(flexNames[i], cfg.Flexibility == i)) { cfg.Flexibility = i; cfg.Save(); }
+            ImGui.EndCombo();
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far joints can bend before they stop.\nNormal: like a person. Flexible: about a third more. No limits: anything goes.");
         var strength = cfg.DragStrength;
         ImGui.SetNextItemWidth(160f);
         if (ImGui.SliderFloat("Drag strength", ref strength, 0.2f, 1.5f, "%.1fx")) cfg.DragStrength = strength;
