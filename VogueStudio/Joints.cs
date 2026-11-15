@@ -51,12 +51,12 @@ public static unsafe class Joints
         new("Neck", "j_kubi", "j_kao", "Body", MoveKind.Free),
         new("Head", "j_kao", null, "Body", MoveKind.Free),
 
-        new("Left shoulder", "j_sako_l", "j_ude_a_l", "Left arm", MoveKind.TwoWay, false),
-        new("Left arm", "j_ude_a_l", "j_ude_b_l", "Left arm", MoveKind.TwoWay),
+        new("Left collarbone", "j_sako_l", "j_ude_a_l", "Left arm", MoveKind.TwoWay, false),
+        new("Left shoulder", "j_ude_a_l", "j_ude_b_l", "Left arm", MoveKind.TwoWay),
         new("Left elbow", "j_ude_b_l", "j_te_l", "Left arm", MoveKind.Hinge),
         new("Left hand", "j_te_l", "j_naka_a_l", "Left arm", MoveKind.TwoWay),
-        new("Right shoulder", "j_sako_r", "j_ude_a_r", "Right arm", MoveKind.TwoWay, false),
-        new("Right arm", "j_ude_a_r", "j_ude_b_r", "Right arm", MoveKind.TwoWay),
+        new("Right collarbone", "j_sako_r", "j_ude_a_r", "Right arm", MoveKind.TwoWay, false),
+        new("Right shoulder", "j_ude_a_r", "j_ude_b_r", "Right arm", MoveKind.TwoWay),
         new("Right elbow", "j_ude_b_r", "j_te_r", "Right arm", MoveKind.Hinge),
         new("Right hand", "j_te_r", "j_naka_a_r", "Right arm", MoveKind.TwoWay),
 
@@ -142,11 +142,19 @@ public static unsafe class Joints
                     axes.AddRange(new[] { Side, Up, Forward });
                     break;
                 case MoveKind.TwoWay:
-                    // All three, minus the one along the part itself (that would be a twist).
-                    foreach (var a in new[] { Side, Up, Forward })
-                        if (MathF.Abs(Vector3.Dot(a, refDir)) < 0.7f) axes.Add(a);
-                    if (axes.Count == 3) { axes.Sort((a, b) => MathF.Abs(Vector3.Dot(a, refDir)).CompareTo(MathF.Abs(Vector3.Dot(b, refDir)))); axes.RemoveAt(2); }
+                {
+                    // All three, minus the one running along the part as it points RIGHT NOW (turning around that would twist it).
+                    // A hanging arm swings forward/back and out; an arm held out raises/lowers and swings forward/back.
+                    var curDir = end >= 0 ? Pos(pose->ModelPose[end]) - Pos(pose->ModelPose[index]) : Vector3.Zero;
+                    var basis = Quaternion.Normalize(rig.ParentRotation * Quaternion.Inverse(refParent));   // standing-pose directions, as the parent is turned now
+                    var dirNow = curDir.LengthSquared() > 1e-8f ? Vector3.Normalize(curDir) : Vector3.Transform(refDir, basis);
+                    var candidates = new List<Vector3> { Side, Up, Forward };
+                    candidates.Sort((a, b) => MathF.Abs(Vector3.Dot(Vector3.Transform(a, basis), dirNow))
+                        .CompareTo(MathF.Abs(Vector3.Dot(Vector3.Transform(b, basis), dirNow))));
+                    axes.Add(candidates[0]);
+                    axes.Add(candidates[1]);
                     break;
+                }
                 case MoveKind.Hinge:
                     axes.Add(SafeCross(refDir, Forward, Side));
                     break;
