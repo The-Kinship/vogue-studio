@@ -62,7 +62,11 @@ public static unsafe class Joints
         var wanted = new HashSet<string>();
         foreach (var p in Parts) wanted.Add(p.Bone);
 
+        // The game library has its own vector types; copy them into plain System.Numerics ones.
         var t = skel->Transform;
+        var tPos = new Vector3(t.Position.X, t.Position.Y, t.Position.Z);
+        var tScale = new Vector3(t.Scale.X, t.Scale.Y, t.Scale.Z);
+        var tRot = new Quaternion(t.Rotation.X, t.Rotation.Y, t.Rotation.Z, t.Rotation.W);
         for (var s = 0; s < skel->PartialSkeletonCount; s++)
         {
             var pose = skel->PartialSkeletons[s].GetHavokPose(0);
@@ -74,8 +78,8 @@ public static unsafe class Joints
                 var name = bones[i].Name.String;
                 if (name == null || !wanted.Contains(name) || result.ContainsKey(name)) continue;
                 var tr = pose->ModelPose[i].Translation;
-                var model = new Vector3(tr.X, tr.Y, tr.Z) * t.Scale;
-                result[name] = t.Position + Vector3.Transform(model, t.Rotation);
+                var model = new Vector3(tr.X, tr.Y, tr.Z) * tScale;
+                result[name] = tPos + Vector3.Transform(model, tRot);
             }
         }
         return result;
