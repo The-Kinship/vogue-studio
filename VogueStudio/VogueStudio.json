@@ -1,0 +1,10 @@
+{
+  "Author": "The Kinship",
+  "Name": "Rafter Cat's Vogue Studio",
+  "Punchline": "Simple click-and-drag posing for GPose: click a body part, drag it where you want.",
+  "Description": "Big, easy-to-hit circles on your character's joints in GPose. Click a body part and drag it with the mouse, no gizmos. Works together with Brio, which holds the pose and still handles hands, feet and fine detail. Type /vogue to open.",
+  "ApplicableVersion": "any",
+  "Tags": [ "gpose", "posing", "brio", "accessibility" ],
+  "RepoUrl": "https://github.com/The-Kinship/vogue-studio",
+  "IconUrl": "https://raw.githubusercontent.com/The-Kinship/vogue-studio/main/images/icon.png"
+}

@@ -1,0 +1,9 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.1.0.0</Version>
+    <Description>Rafter Cat's Vogue Studio: simple click-and-drag posing for GPose, working with Brio.</Description>
+    <PackageProjectUrl>https://github.com/The-Kinship/vogue-studio</PackageProjectUrl>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>
