@@ -42,9 +42,17 @@ public sealed class MainWindow : Window
 
         var selected = Joints.Parts.FirstOrDefault(p => p.Bone == Overlay.Selected);
         ImGui.Spacing();
-        ImGui.TextColored(Gold, selected != null ? "Selected: " + selected.Name : "Click a circle to select a body part.");
-        if (Posing.Locked.Length > 0) ImGui.TextColored(Gold, "Moving " + Posing.Locked + (Posing.AtStop ? " - reached its limit" : " (let go to finish)"));
-        else ImGui.TextColored(Dim, "Drag a circle up/down or sideways. Elbows and knees only bend; nothing twists.");
+        ImGui.TextColored(Gold, Overlay.Selected == Overlay.WholeBody ? "Selected: Whole body (the diamond at the feet)"
+            : selected != null ? "Selected: " + selected.Name : "Click a circle to select a body part.");
+        if (Model.Locked.Length > 0) ImGui.TextColored(Gold, "Moving the whole body " + Model.Locked + " (let go to finish)");
+        else if (Posing.Locked.Length > 0) ImGui.TextColored(Gold, "Moving " + Posing.Locked + (Posing.AtStop ? " - reached its limit" : " (let go to finish)"));
+        else
+        {
+            ImGui.PushTextWrapPos(0f);
+            ImGui.TextColored(Dim, "Drag a circle up/down or sideways. Mouse wheel on a circle moves it the hard-to-drag way. "
+                + "The diamond at the feet moves the whole body (wheel turns them).");
+            ImGui.PopTextWrapPos();
+        }
 
         // Undo / Redo / Reset, always in reach.
         var posed = Joints.Target();
@@ -60,12 +68,21 @@ public sealed class MainWindow : Window
             ImGui.SameLine();
             if (ImGui.Button("Reset pose")) Posing.Reset(posed);
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Puts the character back to their normal pose (you can Undo this).");
+            ImGui.SameLine();
+            if (ImGui.Button("Reset place"))
+            {
+                if (Model.Get(posed) is { } place) Posing.RememberPlace(place);
+                Model.Reset(posed);
+            }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Puts the whole character back where they were standing, facing the original way (you can Undo this).");
         }
         ImGui.Separator();
 
         // --- Body parts, big and easy to click ---
         if (ImGui.BeginChild("##parts", new Vector2(0, -190)))
         {
+            if (ImGui.Selectable("   Whole body (move and turn)##whole", Overlay.Selected == Overlay.WholeBody, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetTextLineHeight() * 1.4f)))
+                Overlay.Selected = Overlay.WholeBody;
             string group = "";
             foreach (var part in Joints.Shown())
             {

@@ -25,6 +25,51 @@ public static class Overlay
     private static readonly Vector4 Gold = new(1f, 0.85f, 0.25f, 1f);
     private static readonly Vector4 White = new(1f, 1f, 1f, 0.95f);
 
+    public const string WholeBody = "#whole";
+
+    /// <summary>The "Whole body" handle: a diamond at the character's feet. Drag to move them, mouse wheel to turn them.</summary>
+    private static void DrawWholeBody(Dalamud.Game.ClientState.Objects.Types.IGameObject actor, List<(Vector2 Pos, string Text, bool Strong)> labels,
+        float r, uint dark, uint gold, uint white, uint fill)
+    {
+        if (!Plugin.GameGui.WorldToScreen(actor.Position, out var screen)) return;
+        var size = new Vector2(r * 3 + 6, r * 3 + 6);
+        ImGui.SetNextWindowPos(screen - size / 2);
+        ImGui.SetNextWindowSize(size);
+        const ImGuiWindowFlags flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.NoSavedSettings
+            | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoMove
+            | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+        if (ImGui.Begin("##vogue_whole", flags))
+        {
+            ImGui.InvisibleButton("hit", size);
+            var hovered = ImGui.IsItemHovered();
+            var mouse = ImGui.GetMousePos();
+            if (ImGui.IsItemActivated()) { Selected = WholeBody; pressAt = mouse; pressedBone = WholeBody; }
+            if (ImGui.IsItemActive() && pressedBone == WholeBody)
+            {
+                if (!Model.Dragging && Vector2.Distance(mouse, pressAt) > 4f) Model.Start(actor, pressAt);
+                if (Model.Dragging) Model.Update(mouse);
+            }
+            if (ImGui.IsItemDeactivated() && pressedBone == WholeBody)
+            {
+                if (Model.Dragging) Model.End(mouse);
+                pressedBone = "";
+            }
+            var wheel = ImGui.GetIO().MouseWheel;
+            if (hovered && wheel != 0 && !Model.Dragging) { Selected = WholeBody; Model.Turn(actor, wheel); }
+
+            var selected = Selected == WholeBody;
+            var d = r * 1.4f;
+            var pts = new[] { screen + new Vector2(0, -d), screen + new Vector2(d, 0), screen + new Vector2(0, d), screen + new Vector2(-d, 0) };
+            var draw = ImGui.GetWindowDrawList();
+            for (var i = 0; i < 4; i++) draw.AddLine(pts[i], pts[(i + 1) % 4], dark, selected ? 7f : 5f);
+            if (selected || hovered) draw.AddQuadFilled(pts[0], pts[1], pts[2], pts[3], fill);
+            for (var i = 0; i < 4; i++) draw.AddLine(pts[i], pts[(i + 1) % 4], selected ? gold : white, selected ? 4f : 2.5f);
+            if (selected || hovered || Plugin.Config.ShowLabels)
+                labels.Add((screen + new Vector2(d + 6, -ImGui.GetTextLineHeight() / 2), "Whole body", selected || hovered));
+        }
+        ImGui.End();
+    }
+
     public static void Draw()
     {
         Hovered = "";
@@ -88,6 +133,10 @@ public static class Overlay
                         pressedBone = "";
                     }
 
+                    // Mouse wheel: the movement that's hard to drag from this camera angle.
+                    var wheel = ImGui.GetIO().MouseWheel;
+                    if (hovered && wheel != 0 && !Posing.Dragging) { Selected = part.Bone; Posing.Wheel(actor, part, wheel, mouse); }
+
                     var selected = Selected == part.Bone;
                     var draw = ImGui.GetWindowDrawList();
                     // Dark ring underneath so the circle shows on any background, then the colored ring.
@@ -98,6 +147,7 @@ public static class Overlay
                 }
                 ImGui.End();
             }
+            DrawWholeBody(actor, labels, r, dark, gold, white, fill);
         }
         finally { ImGui.PopStyleVar(3); }
 

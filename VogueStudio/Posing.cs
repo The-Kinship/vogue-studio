@@ -19,6 +19,8 @@ public static class Posing
     /// <summary>A short line about what's happening or what went wrong ("" when all is fine).</summary>
     public static string Message { get; private set; } = "";
 
+    public static void SetMessage(string text) => Message = text;
+
     /// <summary>How the drag is locked right now, for the window ("" when not dragging).</summary>
     public static string Locked { get; private set; } = "";
 
@@ -41,9 +43,19 @@ public static class Posing
         public long LastSent;
     }
 
+    /// <summary>One Undo step: either a whole pose, or the whole character's position and turn.</summary>
+    private sealed record Step(string? Pose, Model.State? Place);
+
     private static Drag? drag;
-    private static readonly Stack<string> undo = new();
-    private static readonly Stack<string> redo = new();
+    private static readonly Stack<Step> undo = new();
+    private static readonly Stack<Step> redo = new();
+
+    /// <summary>Remembers the whole character's position and turn before moving it (for Undo).</summary>
+    public static void RememberPlace(Model.State place)
+    {
+        undo.Push(new Step(null, place));
+        redo.Clear();
+    }
 
     public static bool Dragging => drag != null;
     public static bool CanUndo => undo.Count > 0;
@@ -112,7 +124,7 @@ public static class Posing
             Actor = actor, Part = part, Pose = pose, Pivot = pivot, Chain = chain,
             Axes = modelAxes, ScreenMove = screenMoves, MouseStart = mouse, Room = room,
         };
-        undo.Push(json);
+        undo.Push(new Step(json, null));
         redo.Clear();
         Message = "";
     }
@@ -145,6 +157,13 @@ public static class Posing
         // How far to turn: the mouse's movement along the tip's on-screen direction, so the tip follows the mouse.
         var screen = drag.ScreenMove[drag.Axis];
         var angle = Vector2.Dot(moved, screen) / screen.LengthSquared() * Plugin.Config.DragStrength;
+        Apply(angle, final);
+    }
+
+    /// <summary>Turns the part (and everything below it) by this angle from where the drag started, within its joint stops.</summary>
+    private static void Apply(float angle, bool final)
+    {
+        if (drag == null) return;
         var (roomLo, roomHi) = drag.Room[drag.Axis];
         var wanted = angle;
         angle = Math.Clamp(angle, MathF.Max(roomLo, -MathF.PI), MathF.Min(roomHi, MathF.PI));
@@ -171,6 +190,35 @@ public static class Posing
     /// <summary>Mouse let go.</summary>
     public static void End(Vector2 mouse) => Update(mouse, final: true);
 
+    private static string lastWheelBone = "";
+    private static long lastWheelTime;
+
+    /// <summary>
+    /// Mouse wheel over a part's circle: moves it the way that's hard to drag from this camera angle
+    /// (the movement pointing most toward or away from the camera), 5 degrees per click.
+    /// A quick run of wheel clicks on the same part is one Undo step.
+    /// </summary>
+    public static void Wheel(IGameObject actor, BodyPart part, float notches, Vector2 mouse)
+    {
+        if (drag != null) return;
+        var now = Environment.TickCount64;
+        var continuing = part.Bone == lastWheelBone && now - lastWheelTime < 1200;
+        lastWheelBone = part.Bone;
+        lastWheelTime = now;
+
+        var undoBefore = undo.Count;
+        Start(actor, part, mouse);
+        if (drag == null) return;
+        if (continuing && undo.Count > undoBefore && undoBefore > 0) undo.Pop();   // keep only the run's first step
+
+        // The movement whose on-screen motion is smallest is the one dragging can't reach.
+        var pick = 0;
+        for (var i = 1; i < drag.ScreenMove.Count; i++)
+            if (drag.ScreenMove[i].Length() < drag.ScreenMove[pick].Length()) pick = i;
+        drag.Axis = pick;
+        Apply(notches * 5f * MathF.PI / 180f, final: true);
+    }
+
     private static void Finish()
     {
         // A click without a real drag changes nothing, so it shouldn't leave an Undo step behind.
@@ -180,26 +228,32 @@ public static class Posing
         AtStop = false;
     }
 
-    public static void Undo(IGameObject actor)
-    {
-        if (undo.Count == 0) return;
-        var now = BrioIpc.GetPose(actor);
-        if (now != null) redo.Push(now);
-        if (!BrioIpc.LoadPose(actor, undo.Pop())) Message = BrioIpc.LastError;
-    }
+    public static void Undo(IGameObject actor) => Swap(actor, undo, redo);
 
-    public static void Redo(IGameObject actor)
+    public static void Redo(IGameObject actor) => Swap(actor, redo, undo);
+
+    /// <summary>Takes a step from one list, saves how things are now on the other, and puts the step back on the character.</summary>
+    private static void Swap(IGameObject actor, Stack<Step> from, Stack<Step> to)
     {
-        if (redo.Count == 0) return;
-        var now = BrioIpc.GetPose(actor);
-        if (now != null) undo.Push(now);
-        if (!BrioIpc.LoadPose(actor, redo.Pop())) Message = BrioIpc.LastError;
+        if (from.Count == 0) return;
+        var step = from.Pop();
+        if (step.Pose != null)
+        {
+            var now = BrioIpc.GetPose(actor);
+            if (now != null) to.Push(new Step(now, null));
+            if (!BrioIpc.LoadPose(actor, step.Pose)) Message = BrioIpc.LastError;
+        }
+        else if (step.Place is { } place)
+        {
+            if (Model.Get(actor) is { } now) to.Push(new Step(null, now));
+            if (!Model.Set(actor, place)) Message = BrioIpc.LastError;
+        }
     }
 
     public static void Reset(IGameObject actor)
     {
         var now = BrioIpc.GetPose(actor);
-        if (now != null) { undo.Push(now); redo.Clear(); }
+        if (now != null) { undo.Push(new Step(now, null)); redo.Clear(); }
         if (!BrioIpc.ResetPose(actor)) Message = BrioIpc.LastError.Length > 0 ? BrioIpc.LastError : "Brio couldn't reset the pose.";
     }
 
