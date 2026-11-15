@@ -37,6 +37,7 @@ public static class Posing
         public required Dictionary<string, (Vector3 Pos, Quaternion Rot)> Chain;  // the part and everything below it, as at the start
         public required List<Vector2> ScreenMove; // how the tip moves on screen per unit of turn, for each axis
         public required List<(float Lo, float Hi)> Room;  // how far each axis may still turn each way from here (joint stops)
+        public int PalmTwist = -1;                // elbows: the forearm-roll axis (mouse wheel only)
         public required Vector2 MouseStart;
         public int Axis = -1;                     // the locked axis (-1 = not decided yet)
         public float LastAngle;
@@ -122,7 +123,7 @@ public static class Posing
         drag = new Drag
         {
             Actor = actor, Part = part, Pose = pose, Pivot = pivot, Chain = chain,
-            Axes = modelAxes, ScreenMove = screenMoves, MouseStart = mouse, Room = room,
+            Axes = modelAxes, ScreenMove = screenMoves, MouseStart = mouse, Room = room, PalmTwist = rig.PalmTwist,
         };
         undo.Push(new Step(json, null));
         redo.Clear();
@@ -144,6 +145,7 @@ public static class Posing
             var bestScore = 0f;
             for (var i = 0; i < drag.ScreenMove.Count; i++)
             {
+                if (i == drag.PalmTwist) continue;   // the forearm roll is mouse wheel only
                 var sm = drag.ScreenMove[i];
                 if (sm.Length() < 5f) continue;   // this movement barely shows from this camera angle
                 var score = MathF.Abs(Vector2.Dot(Vector2.Normalize(sm), dir));
@@ -211,10 +213,13 @@ public static class Posing
         if (drag == null) return;
         if (continuing && undo.Count > undoBefore && undoBefore > 0) undo.Pop();   // keep only the run's first step
 
-        // The movement whose on-screen motion is smallest is the one dragging can't reach.
+        // Elbows: the wheel rolls the forearm (turns the palm). Otherwise: the movement whose on-screen motion
+        // is smallest, which is the one dragging can't reach.
         var pick = 0;
-        for (var i = 1; i < drag.ScreenMove.Count; i++)
-            if (drag.ScreenMove[i].Length() < drag.ScreenMove[pick].Length()) pick = i;
+        if (drag.PalmTwist >= 0) pick = drag.PalmTwist;
+        else
+            for (var i = 1; i < drag.ScreenMove.Count; i++)
+                if (drag.ScreenMove[i].Length() < drag.ScreenMove[pick].Length()) pick = i;
         drag.Axis = pick;
         Apply(notches * 5f * MathF.PI / 180f, final: true);
     }

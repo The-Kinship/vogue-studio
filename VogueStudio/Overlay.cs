@@ -156,7 +156,15 @@ public static class Overlay
 
                     // Mouse wheel: the movement that's hard to drag from this camera angle.
                     var wheel = ImGui.GetIO().MouseWheel;
-                    if (hovered && wheel != 0 && !Posing.Dragging) { Selected = part.Bone; Posing.Wheel(actor, part, wheel, mouse); }
+                    if (hovered && wheel != 0 && !Posing.Dragging)
+                    {
+                        Selected = part.Bone;
+                        // Wheel on a hand turns the palm: that's the forearm rolling, so it's done at the elbow.
+                        var target = part;
+                        if (part.Bone.StartsWith("j_te_"))
+                            target = Array.Find(Joints.Parts, p => p.Bone == "j_ude_b" + part.Bone[^2..]) ?? part;
+                        Posing.Wheel(actor, target, wheel, mouse);
+                    }
 
                     var selected = Selected == part.Bone;
                     var draw = ImGui.GetWindowDrawList();

@@ -40,6 +40,7 @@ public sealed class Rig
     public List<Vector3> Axes = new();    // allowed movement axes, in the parent joint's own frame
     public List<(float Min, float Max)> Limits = new();   // natural range for each axis, in radians from the standing pose
     public Quaternion RefLocal = Quaternion.Identity;      // the part's turn in the standing pose (relative to its parent)
+    public int PalmTwist = -1;                             // elbows: which axis is the forearm roll (turns the palm), -1 = none
 }
 
 /// <summary>
@@ -247,6 +248,19 @@ public static unsafe class Joints
                 // Which way the far end moves for a positive turn, in the standing pose: decides which way is "forward", "up" etc.
                 var (lo, hi) = Range(part, a, Vector3.Cross(a, refDir), jointX);
                 rig.Limits.Add((lo * MathF.PI / 180f, hi * MathF.PI / 180f));
+            }
+            // Elbows also get one controlled twist: rolling the forearm turns the palm (palm to mouth, "stop" hand).
+            // It's around the forearm as it points now, so it still rolls the palm when the elbow is bent.
+            // It barely moves the hand on screen, so dragging never picks it; the mouse wheel does.
+            if (part.Bone.StartsWith("j_ude_b") && end >= 0)
+            {
+                var forearm = Pos(pose->ModelPose[end]) - Pos(pose->ModelPose[index]);
+                if (forearm.LengthSquared() > 1e-8f)
+                {
+                    rig.Axes.Add(Vector3.Normalize(Vector3.Transform(Vector3.Normalize(forearm), Quaternion.Inverse(rig.ParentRotation))));
+                    rig.Limits.Add((-90f * MathF.PI / 180f, 90f * MathF.PI / 180f));
+                    rig.PalmTwist = rig.Axes.Count - 1;
+                }
             }
             if (index < hk->ReferencePose.Length) rig.RefLocal = Rot(hk->ReferencePose[index]);
             return rig;

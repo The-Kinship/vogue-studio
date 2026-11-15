@@ -49,8 +49,8 @@ public sealed class MainWindow : Window
         else
         {
             ImGui.PushTextWrapPos(0f);
-            ImGui.TextColored(Dim, "Drag a circle up/down or sideways. Mouse wheel on a circle moves it the hard-to-drag way. "
-                + "The diamond at the feet moves the whole body (wheel turns them).");
+            ImGui.TextColored(Dim, "Drag a circle up/down or sideways. Mouse wheel on a circle moves it the hard-to-drag way; "
+                + "on a hand or elbow it turns the palm. The diamond at the feet moves the whole body (wheel turns them).");
             ImGui.PopTextWrapPos();
         }
 
