@@ -45,18 +45,18 @@ public sealed class MainWindow : Window
         ImGui.TextColored(Dim, "Drag a circle around its joint to bend it.");
 
         // Undo / Redo / Reset, always in reach.
-        var actor = Joints.Target();
-        if (actor != null && Plugin.ClientState.IsGPosing)
+        var posed = Joints.Target();
+        if (posed != null && Plugin.ClientState.IsGPosing)
         {
             if (!Posing.CanUndo) ImGui.BeginDisabled();
-            if (ImGui.Button("Undo")) Posing.Undo(actor);
+            if (ImGui.Button("Undo")) Posing.Undo(posed);
             if (!Posing.CanUndo) ImGui.EndDisabled();
             ImGui.SameLine();
             if (!Posing.CanRedo) ImGui.BeginDisabled();
-            if (ImGui.Button("Redo")) Posing.Redo(actor);
+            if (ImGui.Button("Redo")) Posing.Redo(posed);
             if (!Posing.CanRedo) ImGui.EndDisabled();
             ImGui.SameLine();
-            if (ImGui.Button("Reset pose")) Posing.Reset(actor);
+            if (ImGui.Button("Reset pose")) Posing.Reset(posed);
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Puts the character back to their normal pose (you can Undo this).");
         }
         ImGui.Separator();
