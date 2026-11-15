@@ -32,6 +32,8 @@ public sealed class Plugin : IDalamudPlugin
         foreach (var cmd in CommandNames)
             CommandManager.AddHandler(cmd, new CommandInfo(OnCommand) { HelpMessage = "Open or close Rafter Cat's Vogue Studio (simple posing for GPose)." });
 
+        // Stay visible in GPose (Dalamud hides plugin windows there unless told otherwise).
+        PluginInterface.UiBuilder.DisableGposeUiHide = true;
         PluginInterface.UiBuilder.Draw += DrawAll;
         PluginInterface.UiBuilder.OpenMainUi += Toggle;
         PluginInterface.UiBuilder.OpenConfigUi += Toggle;
