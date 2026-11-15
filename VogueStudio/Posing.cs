@@ -27,8 +27,9 @@ public static class Posing
         public required IGameObject Actor;
         public required BodyPart Part;
         public required JsonNode Pose;            // the pose when the drag started
-        public required Quaternion StartLocal;    // the part's own turn when the drag started
-        public required List<Vector3> Axes;       // allowed axes (parent joint's frame)
+        public required Vector3 Pivot;            // the joint it turns at (character space)
+        public required List<Vector3> Axes;       // allowed axes (character space)
+        public required Dictionary<string, (Vector3 Pos, Quaternion Rot)> Chain;  // the part and everything below it, as at the start
         public required List<Vector2> ScreenMove; // how the tip moves on screen per unit of turn, for each axis
         public required Vector2 MouseStart;
         public int Axis = -1;                     // the locked axis (-1 = not decided yet)
@@ -53,31 +54,39 @@ public static class Posing
         if (json == null) { Message = BrioIpc.LastError; return; }
         JsonNode? pose;
         try { pose = JsonNode.Parse(json); } catch (Exception) { pose = null; }
-        var rotText = pose?["Bones"]?[part.Bone]?["Rotation"]?.GetValue<string>();
-        if (pose == null || rotText == null || !TryParseQuat(rotText, out var local))
+        var bones = pose?["Bones"] as JsonObject;
+        if (pose == null || bones == null || !TryBone(bones, part.Bone, out var pivot, out _))
         {
             Message = "Brio's pose doesn't have this body part, so it can't be moved.";
             return;
         }
 
+        // Brio keeps every joint in whole-body space, so the part AND everything below it must move together.
+        var chain = new Dictionary<string, (Vector3, Quaternion)>();
+        foreach (var name in Joints.Subtree(actor, part.Bone))
+            if (TryBone(bones, name, out var bp, out var br)) chain[name] = (bp, br);
+
         var rig = Joints.RigFor(actor, part);
         if (rig == null || rig.Axes.Count == 0) { Message = "Couldn't find this body part on the character."; return; }
         if (!Plugin.GameGui.WorldToScreen(rig.Tip, out var tipScreen)) { Message = "This body part is off screen."; return; }
 
-        // For each allowed movement: which way (and how far) the tip moves on screen for a small turn.
+        // For each allowed movement: its axis in character space, and which way (and how far) the tip moves on screen for a small turn.
         const float step = 0.05f;
         var screenMoves = new List<Vector2>();
+        var modelAxes = new List<Vector3>();
         foreach (var a in rig.Axes)
         {
-            var worldAxis = Vector3.Normalize(Vector3.Transform(Vector3.Transform(a, rig.ParentRotation), rig.SkeletonRotation));
+            var modelAxis = Vector3.Normalize(Vector3.Transform(a, rig.ParentRotation));
+            modelAxes.Add(modelAxis);
+            var worldAxis = Vector3.Normalize(Vector3.Transform(modelAxis, rig.SkeletonRotation));
             var moved = rig.Joint + Vector3.Transform(rig.Tip - rig.Joint, Quaternion.CreateFromAxisAngle(worldAxis, step));
             screenMoves.Add(Plugin.GameGui.WorldToScreen(moved, out var ms) ? (ms - tipScreen) / step : Vector2.Zero);
         }
 
         drag = new Drag
         {
-            Actor = actor, Part = part, Pose = pose, StartLocal = local,
-            Axes = rig.Axes, ScreenMove = screenMoves, MouseStart = mouse,
+            Actor = actor, Part = part, Pose = pose, Pivot = pivot, Chain = chain,
+            Axes = modelAxes, ScreenMove = screenMoves, MouseStart = mouse,
         };
         undo.Push(json);
         redo.Clear();
@@ -119,10 +128,15 @@ public static class Posing
         drag.LastSent = now;
         drag.LastAngle = angle;
 
-        // Turn around the chosen axis, measured in the parent joint's frame: no twisting, doll style.
+        // Turn the part and everything below it around the chosen axis, pinned at its joint: rigid, doll style.
         var turn = Quaternion.CreateFromAxisAngle(drag.Axes[drag.Axis], angle);
-        var newLocal = Quaternion.Normalize(turn * drag.StartLocal);
-        drag.Pose["Bones"]![drag.Part.Bone]!["Rotation"] = FormatQuat(newLocal);
+        var bones = drag.Pose["Bones"]!;
+        foreach (var (name, (pos, rot)) in drag.Chain)
+        {
+            var bone = bones[name]!;
+            bone["Position"] = FormatVec(drag.Pivot + Vector3.Transform(pos - drag.Pivot, turn));
+            bone["Rotation"] = FormatQuat(Quaternion.Normalize(turn * rot));
+        }
         if (!BrioIpc.LoadPose(drag.Actor, drag.Pose.ToJsonString())) Message = BrioIpc.LastError;
         if (final) Finish();
     }
@@ -160,6 +174,32 @@ public static class Posing
         if (now != null) { undo.Push(now); redo.Clear(); }
         if (!BrioIpc.ResetPose(actor)) Message = BrioIpc.LastError.Length > 0 ? BrioIpc.LastError : "Brio couldn't reset the pose.";
     }
+
+    /// <summary>A bone's position and turn from Brio's pose text.</summary>
+    private static bool TryBone(JsonObject bones, string name, out Vector3 pos, out Quaternion rot)
+    {
+        pos = default;
+        rot = Quaternion.Identity;
+        if (bones[name] is not JsonObject b) return false;
+        var pt = b["Position"]?.GetValue<string>();
+        var rt = b["Rotation"]?.GetValue<string>();
+        return pt != null && rt != null && TryParseVec(pt, out pos) && TryParseQuat(rt, out rot);
+    }
+
+    private static bool TryParseVec(string text, out Vector3 v)
+    {
+        v = default;
+        var parts = text.Split(',');
+        if (parts.Length != 3) return false;
+        var f = new float[3];
+        for (var i = 0; i < 3; i++)
+            if (!float.TryParse(parts[i].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out f[i])) return false;
+        v = new Vector3(f[0], f[1], f[2]);
+        return true;
+    }
+
+    private static string FormatVec(Vector3 v) =>
+        string.Join(", ", new[] { v.X, v.Y, v.Z }.Select(f => f.ToString(CultureInfo.InvariantCulture)));
 
     private static bool TryParseQuat(string text, out Quaternion q)
     {

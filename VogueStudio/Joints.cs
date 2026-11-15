@@ -159,6 +159,50 @@ public static unsafe class Joints
         return null;
     }
 
+    /// <summary>
+    /// The part and everything below it (shoulder: arm, elbow, hand and fingers; neck: head, face and hair),
+    /// so the whole chain moves together like a doll's limb.
+    /// </summary>
+    public static HashSet<string> Subtree(IGameObject actor, string boneName)
+    {
+        var names = new HashSet<string>();
+        var go = (GameObjectStruct*)actor.Address;
+        if (go == null || go->DrawObject == null) return names;
+        var skel = ((CharacterBase*)go->DrawObject)->Skeleton;
+        if (skel == null || skel->PartialSkeletons == null || skel->PartialSkeletonCount == 0) return names;
+
+        // The main body skeleton: walk down from the bone through every child.
+        var body = skel->PartialSkeletons[0].GetHavokPose(0);
+        if (body == null || body->Skeleton == null) return names;
+        var hk = body->Skeleton;
+        var n = Math.Min(hk->Bones.Length, hk->ParentIndices.Length);
+        var inside = new bool[n];
+        for (var i = 0; i < n; i++)
+        {
+            var name = hk->Bones[i].Name.String;
+            var p = hk->ParentIndices[i];
+            // Parents always come before their children in the list, so one pass is enough.
+            inside[i] = name == boneName || (p >= 0 && p < i && inside[p]);
+            if (inside[i] && name != null) names.Add(name);
+        }
+
+        // Face, hair and other attached skeletons: included when they hang off a bone in the chain.
+        for (var s = 1; s < skel->PartialSkeletonCount; s++)
+        {
+            var partial = &skel->PartialSkeletons[s];
+            var at = partial->ConnectedParentBoneIndex;
+            if (at < 0 || at >= n || !inside[at]) continue;
+            var pose = partial->GetHavokPose(0);
+            if (pose == null || pose->Skeleton == null) continue;
+            for (var i = 0; i < pose->Skeleton->Bones.Length; i++)
+            {
+                var name = pose->Skeleton->Bones[i].Name.String;
+                if (name != null) names.Add(name);
+            }
+        }
+        return names;
+    }
+
     /// <summary>The standing pose, worked out in character space (positions and turns of every bone).</summary>
     private static (Vector3[] Pos, Quaternion[] Rot) ReferencePose(FFXIVClientStructs.Havok.Animation.Rig.hkaSkeleton* hk)
     {
