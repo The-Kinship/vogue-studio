@@ -15,6 +15,13 @@ public class Configuration : IPluginConfiguration
     /// <summary>Joint stops: 0 = normal, 1 = flexible (about a third more), 2 = no limits.</summary>
     public int Flexibility { get; set; }
 
+    /// <summary>Body collision while dragging: parts stop at the body's surface instead of sinking in.</summary>
+    public bool CollisionOn { get; set; } = true;
+    /// <summary>How wide the collision body is (1 = average; raise for muscular/curvy bodies or bulky clothes).</summary>
+    public float BodyThickness { get; set; } = 1f;
+    /// <summary>"Let it touch": how far a part may press in before stopping (fraction of the body's width there).</summary>
+    public float TouchSink { get; set; } = 0.1f;
+
     /// <summary>Size of the joint circles on screen (radius in pixels).</summary>
     public float CircleSize { get; set; } = 16f;
     /// <summary>Show the body part's name next to each circle.</summary>

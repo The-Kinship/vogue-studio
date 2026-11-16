@@ -45,7 +45,9 @@ public sealed class MainWindow : Window
         ImGui.TextColored(Gold, Overlay.Selected == Overlay.WholeBody ? "Selected: Whole body (the diamond at the feet)"
             : selected != null ? "Selected: " + selected.Name : "Click a circle to select a body part.");
         if (Model.Locked.Length > 0) ImGui.TextColored(Gold, "Moving the whole body " + Model.Locked + " (let go to finish)");
-        else if (Posing.Locked.Length > 0) ImGui.TextColored(Gold, "Moving " + Posing.Locked + (Posing.AtStop ? " - reached its limit" : " (let go to finish)"));
+        else if (Posing.Locked.Length > 0)
+            ImGui.TextColored(Gold, "Moving " + Posing.Locked
+                + (Posing.Touching.Length > 0 ? $" - touching the {Posing.Touching}" : Posing.AtStop ? " - reached its limit" : " (let go to finish)"));
         else
         {
             ImGui.PushTextWrapPos(0f);
@@ -94,7 +96,7 @@ public sealed class MainWindow : Window
         ImGui.Separator();
 
         // --- Body parts, big and easy to click ---
-        if (ImGui.BeginChild("##parts", new Vector2(0, -190)))
+        if (ImGui.BeginChild("##parts", new Vector2(0, -260)))
         {
             if (Overlay.DetailRoot.Length == 0
                 && ImGui.Selectable("   Whole body (move and turn)##whole", Overlay.Selected == Overlay.WholeBody, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetTextLineHeight() * 1.4f)))
@@ -138,6 +140,23 @@ public sealed class MainWindow : Window
             ImGui.EndCombo();
         }
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far joints can bend before they stop.\nNormal: like a person. Flexible: about a third more. No limits: anything goes.");
+        var collide = cfg.CollisionOn;
+        if (ImGui.Checkbox("Body collision (parts stop at the body)", ref collide)) { cfg.CollisionOn = collide; cfg.Save(); }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("While dragging, arms, hands, legs and feet stop at the body's surface instead of sinking in.\n"
+            + "It's an approximation with rounded tubes, so small gaps or slight clipping can still happen.\nClothes and props aren't included.");
+        if (cfg.CollisionOn)
+        {
+            var thick = cfg.BodyThickness;
+            ImGui.SetNextItemWidth(160f);
+            if (ImGui.SliderFloat("Body thickness", ref thick, 0.5f, 1.6f, "%.2fx")) cfg.BodyThickness = thick;
+            if (ImGui.IsItemDeactivatedAfterEdit()) cfg.Save();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Raise it if hands still sink in (muscular or curvy bodies, bulky clothes); lower it if they stop short.");
+            var sink = cfg.TouchSink * 100f;
+            ImGui.SetNextItemWidth(160f);
+            if (ImGui.SliderFloat("Let it touch", ref sink, 0f, 50f, "%.0f%%")) cfg.TouchSink = sink / 100f;
+            if (ImGui.IsItemDeactivatedAfterEdit()) cfg.Save();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far a hand may press in before stopping. A little looks natural for a hand resting on a hip.");
+        }
         var strength = cfg.DragStrength;
         ImGui.SetNextItemWidth(160f);
         if (ImGui.SliderFloat("Drag strength", ref strength, 0.2f, 1.5f, "%.1fx")) cfg.DragStrength = strength;

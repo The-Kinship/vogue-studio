@@ -27,6 +27,9 @@ public static class Posing
     /// <summary>True while the drag is pushing against a joint stop.</summary>
     public static bool AtStop { get; private set; }
 
+    /// <summary>The body part the drag is pressing against ("" if none).</summary>
+    public static string Touching { get; private set; } = "";
+
     private sealed class Drag
     {
         public required IGameObject Actor;
@@ -38,6 +41,8 @@ public static class Posing
         public required List<Vector2> ScreenMove; // how the tip moves on screen per unit of turn, for each axis
         public required List<(float Lo, float Hi)> Room;  // how far each axis may still turn each way from here (joint stops)
         public int PalmTwist = -1;                // elbows: the forearm-roll axis (mouse wheel only)
+        public Collision? Body;                   // body collision for this drag (null = off)
+        public float LastGood;                    // the last angle that didn't sink into the body
         public required Vector2 MouseStart;
         public int Axis = -1;                     // the locked axis (-1 = not decided yet)
         public float LastAngle;
@@ -124,6 +129,7 @@ public static class Posing
         {
             Actor = actor, Part = part, Pose = pose, Pivot = pivot, Chain = chain,
             Axes = modelAxes, ScreenMove = screenMoves, MouseStart = mouse, Room = room, PalmTwist = rig.PalmTwist,
+            Body = BuildCollision(bones, chain.Keys, part, rig),
         };
         undo.Push(new Step(json, null));
         redo.Clear();
@@ -170,6 +176,26 @@ public static class Posing
         var wanted = angle;
         angle = Math.Clamp(angle, MathF.Max(roomLo, -MathF.PI), MathF.Min(roomHi, MathF.PI));
         AtStop = MathF.Abs(wanted - angle) > 0.01f;
+
+        // Body collision: if this would sink into the body, go only as far as the surface.
+        Touching = "";
+        if (drag.Body != null)
+        {
+            var axis = drag.Axes[drag.Axis];
+            if (drag.Body.Blocks(drag.Pivot, Quaternion.CreateFromAxisAngle(axis, angle)))
+            {
+                Touching = drag.Body.Touching;
+                // Search between the last fine angle and the wanted one for the furthest fine angle.
+                float good = drag.LastGood, bad = angle;
+                for (var i = 0; i < 10; i++)
+                {
+                    var mid = (good + bad) / 2f;
+                    if (drag.Body.Blocks(drag.Pivot, Quaternion.CreateFromAxisAngle(axis, mid))) bad = mid; else good = mid;
+                }
+                angle = good;
+            }
+            drag.LastGood = angle;
+        }
 
         var now = Environment.TickCount64;
         if (!final && (now - drag.LastSent < 90 || MathF.Abs(angle - drag.LastAngle) < 0.004f)) return;
@@ -231,6 +257,7 @@ public static class Posing
         drag = null;
         Locked = "";
         AtStop = false;
+        Touching = "";
     }
 
     public static void Undo(IGameObject actor) => Swap(actor, undo, redo);
@@ -260,6 +287,17 @@ public static class Posing
         var now = BrioIpc.GetPose(actor);
         if (now != null) { undo.Push(new Step(now, null)); redo.Clear(); }
         if (!BrioIpc.ResetPose(actor)) Message = BrioIpc.LastError.Length > 0 ? BrioIpc.LastError : "Brio couldn't reset the pose.";
+    }
+
+    /// <summary>Body collision for this drag, or null when it's off or doesn't apply (back/chest/neck/head carry most of the body).</summary>
+    private static Collision? BuildCollision(JsonObject bones, ICollection<string> chain, BodyPart part, Rig rig)
+    {
+        if (!Plugin.Config.CollisionOn || part.Kind == MoveKind.Free) return null;
+        var positions = new Dictionary<string, Vector3>();
+        foreach (var (name, _) in bones)
+            if (TryBone(bones, name, out var p, out _)) positions[name] = p;
+        var body = new Collision(positions, chain, part.Bone, rig.ParentName);
+        return body.Empty ? null : body;
     }
 
     /// <summary>A bone's position and turn from Brio's pose text.</summary>

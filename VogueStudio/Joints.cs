@@ -40,7 +40,8 @@ public sealed class Rig
     public List<Vector3> Axes = new();    // allowed movement axes, in the parent joint's own frame
     public List<(float Min, float Max)> Limits = new();   // natural range for each axis, in radians from the standing pose
     public Quaternion RefLocal = Quaternion.Identity;      // the part's turn in the standing pose (relative to its parent)
-    public int PalmTwist = -1;                             // elbows: which axis is the forearm roll (turns the palm), -1 = none
+    public int PalmTwist = -1;
+    public string? ParentName;                             // the joint this part hangs from                             // elbows: which axis is the forearm roll (turns the palm), -1 = none
 }
 
 /// <summary>
@@ -183,6 +184,7 @@ public static unsafe class Joints
             var rig = new Rig { SkeletonRotation = tRot };
             rig.Joint = ToWorld(Pos(pose->ModelPose[index]));
             rig.ParentRotation = parent >= 0 ? Rot(pose->ModelPose[parent]) : Quaternion.Identity;
+            rig.ParentName = parent >= 0 ? hk->Bones[parent].Name.String : null;
 
             // Where the part points now (the far end), for working out which way it moves on screen.
             if (end >= 0) rig.Tip = ToWorld(Pos(pose->ModelPose[end]));
