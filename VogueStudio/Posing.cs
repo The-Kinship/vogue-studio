@@ -292,7 +292,7 @@ public static class Posing
     /// <summary>Body collision for this drag, or null when it's off or doesn't apply (back/chest/neck/head carry most of the body).</summary>
     private static Collision? BuildCollision(JsonObject bones, ICollection<string> chain, BodyPart part, Rig rig)
     {
-        if (!Plugin.Config.CollisionOn || part.Kind == MoveKind.Free) return null;
+        if (!Plugin.Config.CollisionOn || part.Kind is MoveKind.Free or MoveKind.Ear or MoveKind.Tail) return null;
         var positions = new Dictionary<string, Vector3>();
         foreach (var (name, _) in bones)
             if (TryBone(bones, name, out var p, out _)) positions[name] = p;

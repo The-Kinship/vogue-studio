@@ -25,6 +25,10 @@ public enum MoveKind
     Thumb,
     /// <summary>Toes: curl down or lift up.</summary>
     Toe,
+    /// <summary>Ears: perk up, droop and turn (two ways, never twisting).</summary>
+    Ear,
+    /// <summary>Tail joints: bend two ways (up/down and side to side), never twisting; the rest of the tail follows.</summary>
+    Tail,
 }
 
 /// <summary>A body part you can pick: its name, the joint it turns at, the joint at its far end (to see where it points), and how it may move.</summary>
@@ -134,6 +138,57 @@ public static unsafe class Joints
         return result;
     }
 
+    /// <summary>Detail mode "Ears & tail": the ear and tail joints this character has (Miqo'te, Viera, Au Ra, Hrothgar...).</summary>
+    public static List<BodyPart> ExtraParts(IGameObject actor)
+    {
+        var result = new List<BodyPart>();
+        var names = AllBoneNames(actor);
+        // Ears: Miqo'te/Hrothgar style (j_mimi) and Viera style (j_zera, in pieces from base to tip).
+        foreach (var side in new[] { ("_l", "Left"), ("_r", "Right") })
+        {
+            if (names.Contains("j_mimi" + side.Item1))
+                result.Add(new BodyPart($"{side.Item2} ear", "j_mimi" + side.Item1, null, "Ears", MoveKind.Ear, true, true));
+            var seg = 0;
+            foreach (var letter in "abcde")
+            {
+                var bone = $"j_zera_{letter}{side.Item1}";
+                if (!names.Contains(bone)) continue;
+                result.Add(new BodyPart($"{side.Item2} ear ({(seg == 0 ? "base" : seg == 1 ? "middle" : "tip")})", bone, null, "Ears", MoveKind.Ear, true, true));
+                seg++;
+            }
+        }
+        // Tail: joints from the base to the tip; moving one carries the rest of the tail.
+        var n = 1;
+        foreach (var letter in "abcdefgh")
+        {
+            var bone = $"n_sippo_{letter}";
+            if (!names.Contains(bone)) continue;
+            result.Add(new BodyPart(n == 1 ? "Tail (base)" : $"Tail {n}", bone, null, "Tail", MoveKind.Tail, true, true));
+            n++;
+        }
+        return result;
+    }
+
+    private static HashSet<string> AllBoneNames(IGameObject actor)
+    {
+        var names = new HashSet<string>();
+        var go = (GameObjectStruct*)actor.Address;
+        if (go == null || go->DrawObject == null) return names;
+        var skel = ((CharacterBase*)go->DrawObject)->Skeleton;
+        if (skel == null || skel->PartialSkeletons == null) return names;
+        for (var s = 0; s < skel->PartialSkeletonCount; s++)
+        {
+            var pose = skel->PartialSkeletons[s].GetHavokPose(0);
+            if (pose == null || pose->Skeleton == null) continue;
+            for (var i = 0; i < pose->Skeleton->Bones.Length; i++)
+            {
+                var name = pose->Skeleton->Bones[i].Name.String;
+                if (name != null) names.Add(name);
+            }
+        }
+        return names;
+    }
+
     /// <summary>The character being posed: your GPose target, or yourself in GPose.</summary>
     public static IGameObject? Target()
     {
@@ -230,6 +285,8 @@ public static unsafe class Joints
                     axes.Add(SafeCross(refDir, Up, Side));
                     break;
                 case MoveKind.Thumb:
+                case MoveKind.Ear:
+                case MoveKind.Tail:
                 {
                     var basis = Quaternion.Normalize(rig.ParentRotation * Quaternion.Inverse(refParent));
                     var cur = end >= 0 ? Pos(pose->ModelPose[end]) - Pos(pose->ModelPose[index]) : Vector3.Zero;
@@ -285,6 +342,8 @@ public static unsafe class Joints
         if (part.Kind == MoveKind.Finger) return R(100, 20, Toward(-Up));   // curl toward the palm, a little back
         if (part.Kind == MoveKind.Toe) return R(40, 50, Toward(-Up));       // curl down 40, lift up 50
         if (part.Kind == MoveKind.Thumb) return (-50f, 50f);
+        if (part.Kind == MoveKind.Ear) return (-50f, 50f);
+        if (part.Kind == MoveKind.Tail) return (-60f, 60f);
 
         if (bone.StartsWith("j_asi_a"))   // leg at the hip: kick forward/back, or out/in
             return MostlyForward() ? R(120, 40, Toward(Forward)) : R(80, 25, Toward(jointX >= 0 ? Side : -Side));

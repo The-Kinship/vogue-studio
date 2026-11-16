@@ -31,16 +31,19 @@ public static class Overlay
     public static string DetailRoot { get; private set; } = "";
     private static List<BodyPart> detailParts = new();
 
+    /// <summary>The "Ears & tail" detail mode.</summary>
+    public const string Extras = "#extras";
+
     public static void EnterDetail(Dalamud.Game.ClientState.Objects.Types.IGameObject actor, string root)
     {
-        detailParts = Joints.DetailParts(actor, root);
+        detailParts = root == Extras ? Joints.ExtraParts(actor) : Joints.DetailParts(actor, root);
         DetailRoot = root;
-        Selected = root;
+        Selected = root == Extras ? "" : root;
     }
 
     public static void LeaveDetail()
     {
-        Selected = DetailRoot;
+        Selected = DetailRoot == Extras ? "" : DetailRoot;
         DetailRoot = "";
         detailParts = new();
     }

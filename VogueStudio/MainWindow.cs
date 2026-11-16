@@ -87,10 +87,15 @@ public sealed class MainWindow : Window
                 ImGui.SameLine();
                 ImGui.TextColored(Dim, "Zoom the camera in for easier clicking.");
             }
-            else if (selected != null && (selected.Bone.StartsWith("j_te") || selected.Bone.StartsWith("j_asi_d")))
+            else
             {
-                if (ImGui.Button(selected.Bone.StartsWith("j_te") ? $"Detail: {selected.Name}'s fingers" : $"Detail: {selected.Name}'s toes"))
-                    Overlay.EnterDetail(posed, selected.Bone);
+                if (selected != null && (selected.Bone.StartsWith("j_te") || selected.Bone.StartsWith("j_asi_d")))
+                {
+                    if (ImGui.Button(selected.Bone.StartsWith("j_te") ? $"Detail: {selected.Name}'s fingers" : $"Detail: {selected.Name}'s toes"))
+                        Overlay.EnterDetail(posed, selected.Bone);
+                    ImGui.SameLine();
+                }
+                if (ImGui.Button("Detail: ears & tail")) Overlay.EnterDetail(posed, Overlay.Extras);
             }
         }
         ImGui.Separator();
@@ -101,8 +106,10 @@ public sealed class MainWindow : Window
             if (Overlay.DetailRoot.Length == 0
                 && ImGui.Selectable("   Whole body (move and turn)##whole", Overlay.Selected == Overlay.WholeBody, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetTextLineHeight() * 1.4f)))
                 Overlay.Selected = Overlay.WholeBody;
-            if (Overlay.DetailRoot.Length > 0 && Overlay.Current().Count() <= 1)
-                ImGui.TextColored(Warn, "No finger or toe joints found on this character.");
+            if (Overlay.DetailRoot.Length > 0 && Overlay.Current().Count() <= (Overlay.DetailRoot == Overlay.Extras ? 0 : 1))
+                ImGui.TextColored(Warn, Overlay.DetailRoot == Overlay.Extras
+                    ? "No ear or tail joints found on this character."
+                    : "No finger or toe joints found on this character.");
             string group = "";
             foreach (var part in Overlay.Current())
             {
